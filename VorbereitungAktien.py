@@ -5,10 +5,12 @@ import matplotlib.pyplot as plt
 import multiprocessing as mp
 import time
 from statsmodels.tsa.vector_ar.vecm import coint_johansen
+from statsmodels.tsa.stattools import adfuller
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 
 def load_data(start_date, end_date):
+    print("⬇️ Lade Preisdaten von Yahoo Finance...")
     sp500_url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     sp500_df = pd.read_html(sp500_url)[0]
     sp500_tickers = sp500_df["Symbol"].tolist()
@@ -16,6 +18,7 @@ def load_data(start_date, end_date):
     sp500_tickers = [t for t in sp500_tickers if t not in invalid_tickers]
 
     closing_prices_df = yf.download(sp500_tickers, start=start_date, end=end_date)["Close"]
+    print("📊 Daten geladen!")
 
     closing_prices_df.ffill(inplace=True)
     closing_prices_df.bfill(inplace=True)
@@ -39,13 +42,12 @@ def plot_top_pairs(top_pairs):
     )
     plt.xlabel("Pearson-Korrelationskoeffizient")
     plt.ylabel("Aktienpaare")
-    plt.title("Top 15 höhstkorrelierdenen Paare")
+    plt.title("Top 15 höchsten Korrelationen zwischen Aktien")
     plt.xlim(0.85, 1)
     plt.xticks(np.arange(0.85, 1.1, 0.02))
     plt.gca().invert_yaxis()
     plt.show()
 
-#Johansen Test mittels multiprocessing
 def johansen_test(pair, prices_df):
     stock1, stock2 = pair
     prices_matrix = prices_df[[stock1, stock2]]
@@ -55,9 +57,10 @@ def johansen_test(pair, prices_df):
         trace_stat = result.lr1[0]
         critical_value = result.cvt[0, 1]
         is_cointegrated = trace_stat > critical_value
-        return (stock1, stock2, trace_stat, critical_value, is_cointegrated)
+        eigenvector = result.evec[:, 0]
+        return (stock1, stock2, trace_stat, critical_value, is_cointegrated, eigenvector)
     except Exception as e:
-        return (stock1, stock2, None, None, f"Fehler: {e}")
+        return (stock1, stock2, None, None, False, f"Fehler: {e}")
 
 def run_johansen_tests(top_pairs, prices_df):
     print(f"🧠 CPUs verfügbar: {mp.cpu_count()}")
@@ -80,12 +83,39 @@ def run_johansen_tests(top_pairs, prices_df):
         (s1, s2): {
             "Trace-Statistik": ts,
             "Kritischer Wert (95%)": cv,
-            "Cointegrated": c
+            "Cointegrated": c,
+            "Eigenvektor": vec
         }
-        for s1, s2, ts, cv, c in results if ts is not None
+        for s1, s2, ts, cv, c, vec in results if ts is not None
     }
 
     return cointegration_results
+
+def check_spread_stationarity(prices_df, cointegration_results, adf_threshold=0.05):
+    print("\n🔍 Stationarität des Spreads (ADF-Test):\n")
+    stationary_pairs = {}
+
+    for (s1, s2), result in cointegration_results.items():
+        if not result["Cointegrated"] or isinstance(result["Eigenvektor"], str):
+            continue
+
+        vec = result["Eigenvektor"]
+        spread = prices_df[s1] * vec[0] + prices_df[s2] * vec[1]
+
+        adf_result = adfuller(spread)
+        p_value = adf_result[1]
+        is_stationary = p_value < adf_threshold
+
+        print(f"{s1} - {s2}: ADF p-value = {p_value:.4f} → Stationär: {is_stationary}")
+
+        if is_stationary:
+            stationary_pairs[(s1, s2)] = {
+                **result,
+                "ADF p-value": p_value,
+                "Spread": spread
+            }
+
+    return stationary_pairs
 
 def print_results(results_dict):
     print("\n📈 Ergebnisse des Johansen-Tests für Top-Paare:\n")
@@ -94,13 +124,14 @@ def print_results(results_dict):
               f"Kritischer Wert (95%) = {result['Kritischer Wert (95%)']:.3f}, "
               f"Cointegrated: {result['Cointegrated']}")
 
-# 🟢 Hauptprogramm
+
 if __name__ == "__main__":
     start_date = "2024-01-01"
     end_date = "2025-01-01"
 
     prices_df = load_data(start_date, end_date)
     top_pairs = calculate_top_correlations(prices_df, top_n=15)
-    plot_top_pairs(top_pairs)
     results = run_johansen_tests(top_pairs, prices_df)
     print_results(results)
+    stationary_pairs = check_spread_stationarity(prices_df, results)
+    plot_top_pairs(top_pairs)
