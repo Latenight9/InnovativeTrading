@@ -9,30 +9,31 @@ from statsmodels.tsa.stattools import adfuller
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 
-def load_data(start_date, end_date):
-    print("⬇️ Lade Preisdaten von Yahoo Finance...")
-    sp500_url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    sp500_df = pd.read_html(sp500_url)[0]
-    sp500_tickers = sp500_df["Symbol"].tolist()
-    invalid_tickers = ['BF.B', 'BRK.B']
-    sp500_tickers = [t for t in sp500_tickers if t not in invalid_tickers]
+from config import ADF_THRESHOLD  # zentrale Schwelle für ADF-Test
 
-    closing_prices_df = yf.download(sp500_tickers, start=start_date, end=end_date)["Close"]
+# 1️⃣ Daten laden
+def load_data(tickers, start_date, end_date, interval):
+    print("⬇️ Lade Preisdaten von Yahoo Finance...")
+    closing_prices_df = yf.download(tickers, start=start_date, end=end_date, interval=interval)["Close"]
     print("📊 Daten geladen!")
 
+    # Fehlende Werte behandeln
     closing_prices_df.ffill(inplace=True)
     closing_prices_df.bfill(inplace=True)
     closing_prices_df.interpolate(method='linear', inplace=True)
 
+    print("📊 Anzahl Zeitpunkte (Zeilen):", len(closing_prices_df))
     return closing_prices_df
 
-def calculate_top_correlations(prices_df, top_n=15):
+# 2️⃣ Korrelation berechnen
+def calculate_top_correlations(prices_df, top_n):
     correlation_matrix = prices_df.corr(method="pearson")
     correlation_matrix = correlation_matrix.where(np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool))
     correlation_pairs = correlation_matrix.unstack().dropna().sort_values(ascending=False)
     correlation_pairs = correlation_pairs[correlation_pairs < 0.9999]
     return correlation_pairs.head(top_n)
 
+# 🔍 Korrelation visualisieren
 def plot_top_pairs(top_pairs):
     plt.figure(figsize=(12, 6))
     plt.barh(
@@ -46,8 +47,10 @@ def plot_top_pairs(top_pairs):
     plt.xlim(0.85, 1)
     plt.xticks(np.arange(0.85, 1.1, 0.02))
     plt.gca().invert_yaxis()
+    plt.grid(True)
     plt.show()
 
+# 3️⃣ Johansen-Test für ein Paar
 def johansen_test(pair, prices_df):
     stock1, stock2 = pair
     prices_matrix = prices_df[[stock1, stock2]]
@@ -62,17 +65,14 @@ def johansen_test(pair, prices_df):
     except Exception as e:
         return (stock1, stock2, None, None, False, f"Fehler: {e}")
 
+# 4️⃣ Johansen-Test parallelisiert für viele Paare
 def run_johansen_tests(top_pairs, prices_df):
     print(f"🧠 CPUs verfügbar: {mp.cpu_count()}")
     start_time = time.time()
     results = []
 
     with ProcessPoolExecutor(max_workers=mp.cpu_count()) as executor:
-        futures = [
-            executor.submit(johansen_test, pair, prices_df)
-            for pair in top_pairs.index
-        ]
-
+        futures = [executor.submit(johansen_test, pair, prices_df) for pair in top_pairs.index]
         for f in tqdm(as_completed(futures), total=len(futures), desc="📈 Johansen-Tests"):
             results.append(f.result())
 
@@ -91,7 +91,8 @@ def run_johansen_tests(top_pairs, prices_df):
 
     return cointegration_results
 
-def check_spread_stationarity(prices_df, cointegration_results, adf_threshold=0.05):
+# 5️⃣ ADF-Test für stationären Spread
+def check_spread_stationarity(prices_df, cointegration_results):
     print("\n🔍 Stationarität des Spreads (ADF-Test):\n")
     stationary_pairs = {}
 
@@ -101,10 +102,9 @@ def check_spread_stationarity(prices_df, cointegration_results, adf_threshold=0.
 
         vec = result["Eigenvektor"]
         spread = prices_df[s1] * vec[0] + prices_df[s2] * vec[1]
-
         adf_result = adfuller(spread)
         p_value = adf_result[1]
-        is_stationary = p_value < adf_threshold
+        is_stationary = p_value < ADF_THRESHOLD
 
         print(f"{s1} - {s2}: ADF p-value = {p_value:.4f} → Stationär: {is_stationary}")
 
@@ -117,21 +117,10 @@ def check_spread_stationarity(prices_df, cointegration_results, adf_threshold=0.
 
     return stationary_pairs
 
+# 🖨️ Ausgabe
 def print_results(results_dict):
     print("\n📈 Ergebnisse des Johansen-Tests für Top-Paare:\n")
     for pair, result in results_dict.items():
         print(f"{pair}: Trace-Statistik = {result['Trace-Statistik']:.3f}, "
               f"Kritischer Wert (95%) = {result['Kritischer Wert (95%)']:.3f}, "
               f"Cointegrated: {result['Cointegrated']}")
-
-
-if __name__ == "__main__":
-    start_date = "2024-01-01"
-    end_date = "2025-01-01"
-
-    prices_df = load_data(start_date, end_date)
-    top_pairs = calculate_top_correlations(prices_df, top_n=15)
-    results = run_johansen_tests(top_pairs, prices_df)
-    print_results(results)
-    stationary_pairs = check_spread_stationarity(prices_df, results)
-    plot_top_pairs(top_pairs)

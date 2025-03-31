@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from config import START_DATE, END_DATE, INTERVAL, MAX_PAIRS, TOP_N_PAIRS
+from stock import get_stock_tickers
 from Analysis import (
     load_data,
     calculate_top_correlations,
@@ -11,8 +13,7 @@ from Analysis import (
 def calculate_zscore(spread, window=20):
     rolling_mean = spread.rolling(window=window).mean()
     rolling_std = spread.rolling(window=window).std()
-    zscore = (spread - rolling_mean) / rolling_std
-    return zscore
+    return (spread - rolling_mean) / rolling_std
 
 def generate_signals_from_zscore(zscore, entry=2.0, exit=0.5):
     signal = pd.Series(index=zscore.index, data=0)
@@ -30,15 +31,13 @@ def simulate_trades(prices_df, pair, signals, eigenvector, initial_capital=10000
     p1 = prices_df[stock1]
     p2 = prices_df[stock2]
 
-    pos1 = signals.shift(1) * 1
-    pos2 = signals.shift(1) * -beta
+    pos1 = signals * 1
+    pos2 = signals * -beta
 
     returns1 = p1.diff().fillna(0)
     returns2 = p2.diff().fillna(0)
 
-    pnl1 = pos1 * returns1
-    pnl2 = pos2 * returns2
-    pnl = pnl1 + pnl2
+    pnl = pos1 * returns1 + pos2 * returns2
     equity = initial_capital + pnl.cumsum()
 
     entry_price1 = pd.Series(index=p1.index, dtype='float64')
@@ -61,7 +60,7 @@ def simulate_trades(prices_df, pair, signals, eigenvector, initial_capital=10000
     unrealized2 = (p2 - entry_price2) * pos2
     unrealized_pnl = unrealized1 + unrealized2
 
-    trades_df = pd.DataFrame({
+    return pd.DataFrame({
         "Stock1_Price": p1,
         "Stock2_Price": p2,
         "Signal": signals,
@@ -71,8 +70,6 @@ def simulate_trades(prices_df, pair, signals, eigenvector, initial_capital=10000
         "Unrealized_PnL": unrealized_pnl,
         "Equity": equity
     })
-
-    return trades_df
 
 def evaluate_performance(trades_df):
     equity = trades_df["Equity"]
@@ -115,21 +112,11 @@ def plot_equity(trades_df, pair):
     plt.grid(True)
     plt.show()
 
-def plot_unrealized(trades_df, pair):
-    trades_df["Unrealized_PnL"].plot(figsize=(12, 4), color="orange", title=f"Unrealized PnL – {pair[0]} vs {pair[1]}")
-    plt.ylabel("Offener Gewinn/Verlust ($)")
-    plt.axhline(0, color="black", linestyle="--", linewidth=1)
-    plt.grid(True)
-    plt.show()
-
 # 🔁 Hauptprogramm
 if __name__ == "__main__":
-    start_date = "2024-01-01"
-    end_date = "2025-01-01"
-    max_pairs = 5  # ✅ Steuerung der Portfolio-Größe
-
-    prices_df = load_data(start_date, end_date)
-    top_pairs = calculate_top_correlations(prices_df)
+    tickers = get_stock_tickers()
+    prices_df = load_data(tickers, START_DATE, END_DATE, interval=INTERVAL)
+    top_pairs = calculate_top_correlations(prices_df,TOP_N_PAIRS )
     johansen_results = run_johansen_tests(top_pairs, prices_df)
     stationary_pairs = check_spread_stationarity(prices_df, johansen_results)
 
@@ -137,24 +124,20 @@ if __name__ == "__main__":
         print("⚠️ Keine stationären Paare gefunden.")
         exit()
 
-    # 🔢 Sortiere nach Trace-Statistik (Signifikanz der Cointegration)
     sorted_pairs = sorted(stationary_pairs.items(), key=lambda x: x[1]["Trace-Statistik"], reverse=True)
-    selected_pairs = sorted_pairs[:max_pairs]
+    selected_pairs = sorted_pairs[:MAX_PAIRS]
 
     all_trades = {}
-
     for pair, data in selected_pairs:
         print(f"\n🔁 Backtesting für Paar: {pair}")
         spread = data["Spread"]
         eigenvector = data["Eigenvektor"]
-
         zscore = calculate_zscore(spread)
         signals = generate_signals_from_zscore(zscore)
         trades_df = simulate_trades(prices_df, pair, signals, eigenvector)
 
         evaluate_performance(trades_df)
         plot_equity(trades_df, pair)
-        #plot_unrealized(trades_df, pair)
         all_trades[pair] = trades_df
 
     evaluate_portfolio(all_trades)
