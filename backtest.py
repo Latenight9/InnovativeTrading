@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from config import START_DATE, END_DATE, INTERVAL, MAX_PAIRS, TOP_N_PAIRS
+from config import START_DATE, END_DATE, INTERVAL, MAX_PAIRS, TOP_N_PAIRS, DATA_MODE
 from stock import get_stock_tickers
+from crypto import get_crypto_tickers
 from Analysis import (
     load_data,
     calculate_top_correlations,
@@ -114,8 +115,14 @@ def plot_equity(trades_df, pair):
 
 # 🔁 Hauptprogramm
 if __name__ == "__main__":
-    tickers = get_stock_tickers()
-    prices_df = load_data(tickers, START_DATE, END_DATE, interval=INTERVAL)
+    if DATA_MODE == "stocks":
+        tickers = get_stock_tickers()
+        prices_df = load_data(tickers, START_DATE, END_DATE, interval=INTERVAL)
+    else:
+        tickers = get_crypto_tickers(n=20)
+        prices_df = load_data(tickers, interval=INTERVAL)
+    
+    
     top_pairs = calculate_top_correlations(prices_df,TOP_N_PAIRS )
     johansen_results = run_johansen_tests(top_pairs, prices_df)
     stationary_pairs = check_spread_stationarity(prices_df, johansen_results)

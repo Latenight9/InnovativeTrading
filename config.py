@@ -22,3 +22,5 @@ ZSCORE_EXIT = 0.5
 
 # 📉 ADF-Test Schwelle
 ADF_THRESHOLD = 0.05
+
+DATA_MODE = "crypto"

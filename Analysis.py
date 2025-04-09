@@ -4,26 +4,44 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import multiprocessing as mp
 import time
+import ccxt
+from datetime import datetime, timezone, timedelta
 from statsmodels.tsa.vector_ar.vecm import coint_johansen
 from statsmodels.tsa.stattools import adfuller
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 
-from config import ADF_THRESHOLD  # zentrale Schwelle für ADF-Test
+from config import ADF_THRESHOLD, DATA_MODE  # zentrale Schwelle für ADF-Test
 
 # 1️⃣ Daten laden
-def load_data(tickers, start_date, end_date, interval):
-    print("⬇️ Lade Preisdaten von Yahoo Finance...")
-    closing_prices_df = yf.download(tickers, start=start_date, end=end_date, interval=interval)["Close"]
-    print("📊 Daten geladen!")
+def load_data(tickers, start_date=None, end_date=None, interval="1h", since_days=100):
+    if DATA_MODE == "stocks":
+        print("⬇️ Lade Preisdaten von Yahoo Finance...")
+        df = yf.download(tickers, start=start_date, end=end_date, interval=interval)["Close"]
+    else:
+        print("⬇️ Lade Preisdaten von Binance über ccxt...")
+        exchange = ccxt.binance()
+        end_time = datetime.now(timezone.utc)
+        since_time = int((end_time - timedelta(days=since_days)).timestamp() * 1000)
 
-    # Fehlende Werte behandeln
-    closing_prices_df.ffill(inplace=True)
-    closing_prices_df.bfill(inplace=True)
-    closing_prices_df.interpolate(method='linear', inplace=True)
+        all_data = {}
+        for ticker in tickers:
+            try:
+                ohlcv = exchange.fetch_ohlcv(ticker, timeframe=interval, since=since_time)
+                df_ohlcv = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df_ohlcv['timestamp'] = pd.to_datetime(df_ohlcv['timestamp'], unit='ms')
+                df_ohlcv.set_index('timestamp', inplace=True)
+                all_data[ticker] = df_ohlcv['close']
+            except Exception as e:
+                print(f"❌ Fehler bei {ticker}: {e}")
+        df = pd.DataFrame(all_data)
 
-    print("📊 Anzahl Zeitpunkte (Zeilen):", len(closing_prices_df))
-    return closing_prices_df
+    df.ffill(inplace=True)
+    df.bfill(inplace=True)
+    df.interpolate(method='linear', inplace=True)
+    print("📊 Anzahl Zeitpunkte (Zeilen):", len(df))
+    return df
+
 
 # 2️⃣ Korrelation berechnen
 def calculate_top_correlations(prices_df, top_n):
