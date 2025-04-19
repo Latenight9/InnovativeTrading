@@ -1,9 +1,10 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from config import START_DATE, END_DATE, INTERVAL, MAX_PAIRS, TOP_N_PAIRS, DATA_MODE
+from config import START_DATE, END_DATE, INTERVAL, MAX_PAIRS, TOP_N_PAIRS, DATA_MODE, INITIAL_CAPITAL, ZSCORE_ENTRY, ZSCORE_EXIT
 from stock import get_stock_tickers
 from crypto import get_crypto_tickers
+from chan_example import get_chan_example_tickers
 from Analysis import (
     load_data,
     calculate_top_correlations,
@@ -11,7 +12,7 @@ from Analysis import (
     check_spread_stationarity
 )
 
-def calculate_zscore(spread, window=20):
+def calculate_zscore(spread, window=30):
     rolling_mean = spread.rolling(window=window).mean()
     rolling_std = spread.rolling(window=window).std()
     return (spread - rolling_mean) / rolling_std
@@ -21,13 +22,13 @@ def generate_signals_from_zscore(zscore, entry=2.0, exit=0.5):
     signal[zscore > entry] = -1
     signal[zscore < -entry] = 1
     signal[(zscore > -exit) & (zscore < exit)] = 0
-    signal = signal.replace(to_replace=0, method='ffill')
+    signal = signal.replace(0, np.nan).ffill()
+    signal.iloc[0] = 0
     signal.iloc[-1] = 0
     return signal
 
-def simulate_trades(prices_df, pair, signals, eigenvector, initial_capital=10000.0):
+def simulate_trades(prices_df, pair, signals, beta, initial_capital=INITIAL_CAPITAL):
     stock1, stock2 = pair
-    beta = eigenvector[1] / eigenvector[0]
 
     p1 = prices_df[stock1]
     p2 = prices_df[stock2]
@@ -112,15 +113,35 @@ def plot_equity(trades_df, pair):
     plt.ylabel("Kapital ($)")
     plt.grid(True)
     plt.show()
+    
+def plot_zscore(zscore, pair, entry=2.0, exit=0.5):
+    plt.figure(figsize=(12, 4))
+    plt.plot(zscore, label='z-Score', color='blue')
+    plt.axhline(entry, color='red', linestyle='--', label=f'Entry +{entry}')
+    plt.axhline(-entry, color='red', linestyle='--', label=f'Entry -{entry}')
+    plt.axhline(exit, color='gray', linestyle=':', label=f'Exit +{exit}')
+    plt.axhline(-exit, color='gray', linestyle=':', label=f'Exit -{exit}')
+    plt.axhline(0, color='black', linewidth=1)
+    plt.title(f"📐 z-Score Verlauf – {pair[0]} vs {pair[1]}")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
 
 # 🔁 Hauptprogramm
 if __name__ == "__main__":
     if DATA_MODE == "stocks":
         tickers = get_stock_tickers()
         prices_df = load_data(tickers, START_DATE, END_DATE, interval=INTERVAL)
-    else:
-        tickers = get_crypto_tickers(n=20)
+    elif DATA_MODE == "chan_example":
+        tickers = get_chan_example_tickers()
+        prices_df = load_data(tickers, START_DATE, END_DATE, interval=INTERVAL)
+    elif DATA_MODE == "crypto":
+        tickers = get_crypto_tickers(n=1)
         prices_df = load_data(tickers, interval=INTERVAL)
+    else:
+        raise ValueError("Ungültiger DATA_MODE in config.py")
     
     
     top_pairs = calculate_top_correlations(prices_df,TOP_N_PAIRS )
@@ -138,10 +159,11 @@ if __name__ == "__main__":
     for pair, data in selected_pairs:
         print(f"\n🔁 Backtesting für Paar: {pair}")
         spread = data["Spread"]
-        eigenvector = data["Eigenvektor"]
+        beta = data["Beta"]
         zscore = calculate_zscore(spread)
-        signals = generate_signals_from_zscore(zscore)
-        trades_df = simulate_trades(prices_df, pair, signals, eigenvector)
+        signals = generate_signals_from_zscore(zscore, entry=ZSCORE_ENTRY, exit=ZSCORE_EXIT)
+        #plot_zscore(zscore, pair)
+        trades_df = simulate_trades(prices_df, pair, signals, beta, initial_capital=INITIAL_CAPITAL)
 
         evaluate_performance(trades_df)
         plot_equity(trades_df, pair)

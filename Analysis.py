@@ -10,14 +10,13 @@ from statsmodels.tsa.vector_ar.vecm import coint_johansen
 from statsmodels.tsa.stattools import adfuller
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
-
 from config import ADF_THRESHOLD, DATA_MODE  # zentrale Schwelle für ADF-Test
 
 # 1️⃣ Daten laden
 def load_data(tickers, start_date=None, end_date=None, interval="1h", since_days=100):
-    if DATA_MODE == "stocks":
+    if DATA_MODE in ["stocks", "chan_example"]:
         print("⬇️ Lade Preisdaten von Yahoo Finance...")
-        df = yf.download(tickers, start=start_date, end=end_date, interval=interval)["Close"]
+        df = yf.download(tickers, start=start_date, end=end_date, interval=interval, auto_adjust=False)["Close"]
     else:
         print("⬇️ Lade Preisdaten von Binance über ccxt...")
         exchange = ccxt.binance()
@@ -71,10 +70,10 @@ def plot_top_pairs(top_pairs):
 # 3️⃣ Johansen-Test für ein Paar
 def johansen_test(pair, prices_df):
     stock1, stock2 = pair
-    prices_matrix = prices_df[[stock1, stock2]]
-
+    
     try:
-        result = coint_johansen(prices_matrix, det_order=0, k_ar_diff=1)
+        log_prices = np.log(prices_df[[stock1, stock2]])
+        result = coint_johansen(log_prices, det_order=0, k_ar_diff=1)
         trace_stat = result.lr1[0]
         critical_value = result.cvt[0, 1]
         is_cointegrated = trace_stat > critical_value
@@ -115,22 +114,40 @@ def check_spread_stationarity(prices_df, cointegration_results):
     stationary_pairs = {}
 
     for (s1, s2), result in cointegration_results.items():
-        if not result["Cointegrated"] or isinstance(result["Eigenvektor"], str):
+        if isinstance(result["Eigenvektor"], str):
             continue
 
         vec = result["Eigenvektor"]
-        spread = prices_df[s1] * vec[0] + prices_df[s2] * vec[1]
+        if abs(vec[0]) < 1e-6:
+            print(f"⚠️ Eigenvektor für {s1}-{s2} instabil (vec[0] ≈ 0), übersprungen.")
+            continue
+
+        log_p1 = np.log(prices_df[s1])
+        log_p2 = np.log(prices_df[s2])
+        
+        beta = -vec[1] / vec[0]
+        #beta = np.polyfit(log_p2, log_p1, 1)[0] 
+
+        # Schutz gegen unsinnige Verhältnisse
+        # if abs(beta) > 10 or abs(beta) < 0.01:
+        #     print(f"⚠️ Unplausibles Beta-Verhältnis {beta:.4f} bei {s1}-{s2} → übersprungen.")
+        #     continue
+
+        
+        spread = log_p1 - beta * log_p2
+
         adf_result = adfuller(spread)
         p_value = adf_result[1]
         is_stationary = p_value < ADF_THRESHOLD
 
-        print(f"{s1} - {s2}: ADF p-value = {p_value:.4f} → Stationär: {is_stationary}")
+        print(f"{s1} - {s2}: ADF p-value = {p_value:.4f} → Stationär: {is_stationary} | beta = {beta:.4f}")
 
         if is_stationary:
             stationary_pairs[(s1, s2)] = {
                 **result,
                 "ADF p-value": p_value,
-                "Spread": spread
+                "Spread": spread,
+                "Beta": beta
             }
 
     return stationary_pairs
