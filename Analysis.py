@@ -10,7 +10,7 @@ from statsmodels.tsa.vector_ar.vecm import coint_johansen
 from statsmodels.tsa.stattools import adfuller
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
-from config import ADF_THRESHOLD, DATA_MODE  # zentrale Schwelle für ADF-Test
+from config import ADF_THRESHOLD, DATA_MODE, LOOKBACK_PERIOD  # zentrale Schwelle für ADF-Test
 
 # 1️⃣ Daten laden
 def load_data(tickers, start_date=None, end_date=None, interval="1h", since_days=100):
@@ -125,8 +125,8 @@ def check_spread_stationarity(prices_df, cointegration_results):
         log_p1 = np.log(prices_df[s1])
         log_p2 = np.log(prices_df[s2])
         
-        beta = -vec[1] / vec[0]
-        #beta = np.polyfit(log_p2, log_p1, 1)[0] 
+        #beta = -vec[1] / vec[0]
+        beta = np.polyfit(log_p2, log_p1, 1)[0] 
 
         # Schutz gegen unsinnige Verhältnisse
         # if abs(beta) > 10 or abs(beta) < 0.01:
@@ -151,6 +151,22 @@ def check_spread_stationarity(prices_df, cointegration_results):
             }
 
     return stationary_pairs
+
+def calculate_rolling_beta(p1, p2, lookback):
+    beta_series = pd.Series(index=p1.index, dtype=float)
+    for i in range(lookback-1, len(p1)):
+        x = p2.iloc[i-lookback+1:i+1]
+        y = p1.iloc[i-lookback+1:i+1]
+        if x.isnull().any() or y.isnull().any():
+            continue
+        beta = np.polyfit(x, y, 1)[0]
+        beta_series.iloc[i] = beta
+    return beta_series
+
+def generate_positions_from_zscore(spread, lookback):
+    zscore = (spread - spread.rolling(lookback).mean()) / spread.rolling(lookback).std()
+    zscore = zscore.fillna(0)
+    return -zscore
 
 # 🖨️ Ausgabe
 def print_results(results_dict):

@@ -1,8 +1,8 @@
 # config.py
 
 # 📅 Datenzeitraum
-START_DATE = "2023-01-01"
-END_DATE = "2025-01-01"
+START_DATE = "2006-05-01"
+END_DATE = "2012-04-01"
 
 # 🕒 Intervall für Daten (z. B. "1h", "1d", "15m")
 INTERVAL = "1d"
@@ -17,10 +17,13 @@ MAX_PAIRS = 1
 INITIAL_CAPITAL = 10_000.0
 
 # 🧠 Signalparameter
-ZSCORE_ENTRY = 3.5
-ZSCORE_EXIT = 0.2
+ZSCORE_ENTRY = 1.7
+ZSCORE_EXIT = 0.5
 
 # 📉 ADF-Test Schwelle
-ADF_THRESHOLD = 0.1
+ADF_THRESHOLD = 0.4
 
-DATA_MODE = "stocks"
+LOOKBACK_PERIOD = 20
+
+
+DATA_MODE = "chan_example"

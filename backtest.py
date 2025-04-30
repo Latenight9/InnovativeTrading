@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from config import START_DATE, END_DATE, INTERVAL, MAX_PAIRS, TOP_N_PAIRS, DATA_MODE, INITIAL_CAPITAL, ZSCORE_ENTRY, ZSCORE_EXIT
+from config import START_DATE, END_DATE, INTERVAL, MAX_PAIRS, TOP_N_PAIRS, DATA_MODE, INITIAL_CAPITAL, ZSCORE_ENTRY, ZSCORE_EXIT, LOOKBACK_PERIOD
 from stock import get_stock_tickers
 from crypto import get_crypto_tickers
 from chan_example import get_chan_example_tickers
@@ -9,13 +9,17 @@ from Analysis import (
     load_data,
     calculate_top_correlations,
     run_johansen_tests,
-    check_spread_stationarity
+    check_spread_stationarity,
+    calculate_rolling_beta,
+    generate_positions_from_zscore
 )
 
 def calculate_zscore(spread, window=30):
-    rolling_mean = spread.rolling(window=window).mean()
-    rolling_std = spread.rolling(window=window).std()
-    return (spread - rolling_mean) / rolling_std
+    rolling_mean = spread.shift(1).rolling(window=window).mean() #lookahead bias vermeiden
+    rolling_std = spread.shift(1).rolling(window=window).std()
+    zscore = (spread - rolling_mean) / rolling_std
+    zscore = zscore.fillna(0)
+    return zscore
 
 def generate_signals_from_zscore(zscore, entry=2.0, exit=0.5):
     signal = pd.Series(index=zscore.index, data=0)
@@ -27,28 +31,39 @@ def generate_signals_from_zscore(zscore, entry=2.0, exit=0.5):
     signal.iloc[-1] = 0
     return signal
 
-def simulate_trades(prices_df, pair, signals, beta, initial_capital=INITIAL_CAPITAL):
+def simulate_trades(prices_df, pair, positions, beta_series, initial_capital=10000.0):
     stock1, stock2 = pair
-
     p1 = prices_df[stock1]
     p2 = prices_df[stock2]
 
-    pos1 = signals * 1
-    pos2 = signals * -beta
+    pos1_shares = positions
+    pos2_shares = -beta_series * positions
 
-    returns1 = p1.diff().fillna(0)
-    returns2 = p2.diff().fillna(0)
+    pos1_dollar = pos1_shares * p1
+    pos2_dollar = pos2_shares * p2
 
-    pnl = pos1 * returns1 + pos2 * returns2
+    ret1 = p1.pct_change().fillna(0)
+    ret2 = p2.pct_change().fillna(0)
+
+    pnl = pos1_dollar.shift(1) * ret1 + pos2_dollar.shift(1) * ret2
+    pnl = pnl.fillna(0)
+
+    # Equity in $ wie bisher
     equity = initial_capital + pnl.cumsum()
 
-    entry_price1 = pd.Series(index=p1.index, dtype='float64')
-    entry_price2 = pd.Series(index=p2.index, dtype='float64')
-    for i in range(len(signals)):
-        if i == 0:
-            continue
-        if signals.iloc[i] != signals.iloc[i - 1]:
-            if signals.iloc[i] != 0:
+    # Chan-style: Return bezogen auf investiertes Kapital
+    gross_market_value = pos1_dollar.shift(1).abs() + pos2_dollar.shift(1).abs()
+    ret = pnl / gross_market_value
+    ret = ret.fillna(0)
+
+    cumulative_return = (1 + ret).cumprod() - 1
+
+    # Einstandspreise zur Berechnung offener PnL
+    entry_price1 = p1.copy()
+    entry_price2 = p2.copy()
+    for i in range(1, len(positions)):
+        if positions.iloc[i] != positions.iloc[i - 1]:
+            if positions.iloc[i] != 0:
                 entry_price1.iloc[i] = p1.iloc[i]
                 entry_price2.iloc[i] = p2.iloc[i]
             else:
@@ -58,55 +73,78 @@ def simulate_trades(prices_df, pair, signals, beta, initial_capital=INITIAL_CAPI
             entry_price1.iloc[i] = entry_price1.iloc[i - 1]
             entry_price2.iloc[i] = entry_price2.iloc[i - 1]
 
-    unrealized1 = (p1 - entry_price1) * pos1
-    unrealized2 = (p2 - entry_price2) * pos2
-    unrealized_pnl = unrealized1 + unrealized2
+    unrealized1 = (p1 - entry_price1) * pos1_shares
+    unrealized2 = (p2 - entry_price2) * pos2_shares
+    unrealized_pnl = (unrealized1 + unrealized2).fillna(0)
 
     return pd.DataFrame({
         "Stock1_Price": p1,
         "Stock2_Price": p2,
-        "Signal": signals,
-        "Position_1": pos1,
-        "Position_2": pos2,
+        "Position_1": pos1_shares,
+        "Position_2": pos2_shares,
+        "Position_$1": pos1_dollar,
+        "Position_$2": pos2_dollar,
         "Realized_PnL": pnl,
         "Unrealized_PnL": unrealized_pnl,
-        "Equity": equity
+        "Equity": equity,
+        "Return": ret,
+        "Cumulative_Return": cumulative_return
     })
 
-def evaluate_performance(trades_df):
-    equity = trades_df["Equity"]
-    returns = equity.pct_change().fillna(0)
-    sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(252)
-    max_drawdown = (equity / equity.cummax() - 1).min()
 
-    print("\n📊 Performance-Statistiken:")
-    print(f"🔹 Finales Kapital:         {equity.iloc[-1]:.2f}")
-    print(f"🔹 Gesamtrendite:           {(equity.iloc[-1] - equity.iloc[0]) / equity.iloc[0] * 100:.2f}%")
-    print(f"🔹 Sharpe Ratio:            {sharpe_ratio:.2f}")
-    print(f"🔹 Max. Drawdown:           {max_drawdown * 100:.2f}%")
-    print(f"🔹 Höchster offener Gewinn:  {trades_df['Unrealized_PnL'].max():.2f}")
-    print(f"🔹 Höchster offener Verlust: {trades_df['Unrealized_PnL'].min():.2f}")
+
+def evaluate_performance(trades_df):
+    returns = trades_df["Return"]
+    cumulative_return = trades_df["Cumulative_Return"]
+    unrealized = trades_df["Unrealized_PnL"]
+
+    mean_daily_return = returns.mean()
+    std_daily_return = returns.std()
+
+    apr = (1 + mean_daily_return) ** 252 - 1
+    sharpe = (mean_daily_return / std_daily_return) * np.sqrt(252) if std_daily_return != 0 else 0
+    max_drawdown = (cumulative_return - cumulative_return.cummax()).min()
+
+    print("\n📊 Performance-Statistiken (Chan-kompatibel):")
+    print(f"🔹 APR:                    {apr:.2%}")
+    print(f"🔹 Sharpe Ratio:           {sharpe:.2f}")
+    print(f"🔹 Max. Drawdown:          {max_drawdown:.2%}")
+    print(f"🔹 Höchster offener Gewinn:  {unrealized.max():.2f}")
+    print(f"🔹 Höchster offener Verlust: {unrealized.min():.2f}")
+
 
 def evaluate_portfolio(all_trades):
-    combined_equity = sum(df["Equity"] for df in all_trades.values())
-    combined_returns = combined_equity.pct_change().fillna(0)
+    # 1. Kombinierte tägliche Returns (Durchschnitt über Paare)
+    all_returns = pd.DataFrame({
+        pair: df["Return"] for pair, df in all_trades.items()
+    })
+    portfolio_return = all_returns.mean(axis=1)
 
-    sharpe_ratio = (combined_returns.mean() / combined_returns.std()) * np.sqrt(252)
-    max_drawdown = (combined_equity / combined_equity.cummax() - 1).min()
+    # 2. Kumulative Rendite
+    cumulative_return = (1 + portfolio_return).cumprod() - 1
 
-    print("\n📊 📦 Portfolio Performance:")
-    print(f"🔹 Finales Kapital:         {combined_equity.iloc[-1]:.2f}")
-    print(f"🔹 Gesamtrendite:           {(combined_equity.iloc[-1] - combined_equity.iloc[0]) / combined_equity.iloc[0] * 100:.2f}%")
-    print(f"🔹 Sharpe Ratio:            {sharpe_ratio:.2f}")
-    print(f"🔹 Max. Drawdown:           {max_drawdown * 100:.2f}%")
+    # 3. APR & Sharpe
+    mean_daily_return = portfolio_return.mean()
+    std_daily_return = portfolio_return.std()
+    apr = (1 + mean_daily_return) ** 252 - 1
+    sharpe = (mean_daily_return / std_daily_return) * np.sqrt(252) if std_daily_return != 0 else 0
+    max_drawdown = (cumulative_return - cumulative_return.cummax()).min()
 
+    print("\n📊 📦 Portfolio Performance (Chan-kompatibel):")
+    print(f"🔹 APR:                   {apr:.2%}")
+    print(f"🔹 Sharpe Ratio:          {sharpe:.2f}")
+    print(f"🔹 Max. Drawdown:         {max_drawdown:.2%}")
+
+    # 4. Plot
     plt.figure(figsize=(12, 5))
-    plt.plot(combined_equity, label="Portfolio Equity")
-    plt.title("📦 Gesamt-Equity-Kurve (Portfolio)")
-    plt.ylabel("Kapital ($)")
+    plt.plot(cumulative_return, label="Portfolio Return")
+    plt.title("📦 Kumulative Renditekurve (Portfolio)")
+    plt.ylabel("Return (%)")
     plt.grid(True)
     plt.legend()
+    plt.tight_layout()
     plt.show()
+
 
 def plot_equity(trades_df, pair):
     trades_df["Equity"].plot(figsize=(12, 5), title=f"Equity Curve – {pair[0]} vs {pair[1]}")
@@ -127,6 +165,18 @@ def plot_zscore(zscore, pair, entry=2.0, exit=0.5):
     plt.grid(True)
     plt.tight_layout()
     plt.show()
+    
+def plot_cumulative_return(trades_df, pair):
+    plt.figure(figsize=(12, 5))
+    plt.plot(trades_df["Cumulative_Return"], label="Cumulative Return")
+    plt.title(f"📈 Chan-Style Renditekurve – {pair[0]} vs {pair[1]}")
+    plt.ylabel("Rendite (%)")
+    plt.xlabel("Datum")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
 
 
 # 🔁 Hauptprogramm
@@ -158,15 +208,18 @@ if __name__ == "__main__":
     all_trades = {}
     for pair, data in selected_pairs:
         print(f"\n🔁 Backtesting für Paar: {pair}")
-        spread = data["Spread"]
-        beta = data["Beta"]
-        zscore = calculate_zscore(spread)
-        signals = generate_signals_from_zscore(zscore, entry=ZSCORE_ENTRY, exit=ZSCORE_EXIT)
-        #plot_zscore(zscore, pair)
-        trades_df = simulate_trades(prices_df, pair, signals, beta, initial_capital=INITIAL_CAPITAL)
+        p1 = prices_df[pair[0]]
+        p2 = prices_df[pair[1]]
 
+        beta_series = calculate_rolling_beta(p1, p2, LOOKBACK_PERIOD)
+        spread = p1 - beta_series * p2
+
+        positions = generate_positions_from_zscore(spread, LOOKBACK_PERIOD)
+
+        trades_df = simulate_trades(prices_df, pair, positions, beta_series, initial_capital=INITIAL_CAPITAL)
         evaluate_performance(trades_df)
         plot_equity(trades_df, pair)
+        plot_cumulative_return(trades_df, pair)
         all_trades[pair] = trades_df
 
     evaluate_portfolio(all_trades)
