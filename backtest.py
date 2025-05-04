@@ -59,16 +59,14 @@ def simulate_trades(prices_df, pair, positions, beta_series, initial_capital=100
     cumulative_return = (1 + ret).cumprod() - 1
 
     # Einstandspreise zur Berechnung offener PnL
-    entry_price1 = p1.copy()
-    entry_price2 = p2.copy()
+    entry_price1 = pd.Series(index=p1.index, dtype="float64")
+    entry_price2 = pd.Series(index=p2.index, dtype="float64")
+
     for i in range(1, len(positions)):
         if positions.iloc[i] != positions.iloc[i - 1]:
             if positions.iloc[i] != 0:
                 entry_price1.iloc[i] = p1.iloc[i]
                 entry_price2.iloc[i] = p2.iloc[i]
-            else:
-                entry_price1.iloc[i] = np.nan
-                entry_price2.iloc[i] = np.nan
         else:
             entry_price1.iloc[i] = entry_price1.iloc[i - 1]
             entry_price2.iloc[i] = entry_price2.iloc[i - 1]
