@@ -58,23 +58,6 @@ def simulate_trades(prices_df, pair, positions, beta_series, initial_capital=100
 
     cumulative_return = (1 + ret).cumprod() - 1
 
-    # Einstandspreise zur Berechnung offener PnL
-    entry_price1 = pd.Series(index=p1.index, dtype="float64")
-    entry_price2 = pd.Series(index=p2.index, dtype="float64")
-
-    for i in range(1, len(positions)):
-        if positions.iloc[i] != positions.iloc[i - 1]:
-            if positions.iloc[i] != 0:
-                entry_price1.iloc[i] = p1.iloc[i]
-                entry_price2.iloc[i] = p2.iloc[i]
-        else:
-            entry_price1.iloc[i] = entry_price1.iloc[i - 1]
-            entry_price2.iloc[i] = entry_price2.iloc[i - 1]
-
-    unrealized1 = (p1 - entry_price1) * pos1_shares
-    unrealized2 = (p2 - entry_price2) * pos2_shares
-    unrealized_pnl = (unrealized1 + unrealized2).fillna(0)
-
     return pd.DataFrame({
         "Stock1_Price": p1,
         "Stock2_Price": p2,
@@ -83,7 +66,6 @@ def simulate_trades(prices_df, pair, positions, beta_series, initial_capital=100
         "Position_$1": pos1_dollar,
         "Position_$2": pos2_dollar,
         "Realized_PnL": pnl,
-        "Unrealized_PnL": unrealized_pnl,
         "Equity": equity,
         "Return": ret,
         "Cumulative_Return": cumulative_return
@@ -94,7 +76,6 @@ def simulate_trades(prices_df, pair, positions, beta_series, initial_capital=100
 def evaluate_performance(trades_df):
     returns = trades_df["Return"]
     cumulative_return = trades_df["Cumulative_Return"]
-    unrealized = trades_df["Unrealized_PnL"]
 
     mean_daily_return = returns.mean()
     std_daily_return = returns.std()
@@ -107,8 +88,6 @@ def evaluate_performance(trades_df):
     print(f"🔹 APR:                    {apr:.2%}")
     print(f"🔹 Sharpe Ratio:           {sharpe:.2f}")
     print(f"🔹 Max. Drawdown:          {max_drawdown:.2%}")
-    print(f"🔹 Höchster offener Gewinn:  {unrealized.max():.2f}")
-    print(f"🔹 Höchster offener Verlust: {unrealized.min():.2f}")
 
 
 def evaluate_portfolio(all_trades):
@@ -128,7 +107,7 @@ def evaluate_portfolio(all_trades):
     sharpe = (mean_daily_return / std_daily_return) * np.sqrt(252) if std_daily_return != 0 else 0
     max_drawdown = (cumulative_return - cumulative_return.cummax()).min()
 
-    print("\n📊 📦 Portfolio Performance (Chan-kompatibel):")
+    print("\n📊 📦 Portfolio Performance:")
     print(f"🔹 APR:                   {apr:.2%}")
     print(f"🔹 Sharpe Ratio:          {sharpe:.2f}")
     print(f"🔹 Max. Drawdown:         {max_drawdown:.2%}")
@@ -167,7 +146,7 @@ def plot_zscore(zscore, pair, entry=2.0, exit=0.5):
 def plot_cumulative_return(trades_df, pair):
     plt.figure(figsize=(12, 5))
     plt.plot(trades_df["Cumulative_Return"], label="Cumulative Return")
-    plt.title(f"📈 Chan-Style Renditekurve – {pair[0]} vs {pair[1]}")
+    plt.title(f"📈 Renditekurve – {pair[0]} vs {pair[1]}")
     plt.ylabel("Rendite (%)")
     plt.xlabel("Datum")
     plt.grid(True)
