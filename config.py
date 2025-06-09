@@ -26,4 +26,4 @@ ADF_THRESHOLD = 0.4
 LOOKBACK_PERIOD = 20
 
 
-DATA_MODE = "chan_example"
+DATA_MODE = "binance"
