@@ -1,52 +1,37 @@
-import numpy as np
 import torch
-import torch.nn.functional as F
+import random
 
+def jitter(window, sigma=0.01):
+    noise = torch.normal(0.0, sigma, size=window.shape).to(window.device)
+    return window + noise
 
-def time_warp(window, sigma=0.2):
-    """
-    Verzerrt die Zeitachse nichtlinear (z. B. durch Interpolation).
-    """
-    T, D = window.shape
-    device = window.device
+def scaling(window, sigma=0.1):
+    # Skaliere nur entlang der Feature-Dimension (letzte Achse)
+    scale = torch.normal(1.0, sigma, size=(1, 1, window.shape[2])).to(window.device)
+    return window * scale
 
-    # Zufällige Verzerrung der Zeitachsen-Positionen
-    original_idx = torch.arange(T, device=device).float()
-    random_offsets = torch.normal(0.0, sigma, size=(T,), device=device)
-    warped_idx = original_idx + random_offsets
-    warped_idx = torch.clamp(warped_idx, 0, T - 1)
-
-    # Interpolieren entlang Zeitachse (pro Channel separat)
-    warped = F.interpolate(
-        window.T.unsqueeze(0),  # (1, D, T)
-        size=T,
-        mode='linear',
-        align_corners=True,
-        recompute_scale_factor=False
-    ).squeeze(0).T
-
+def time_warp(window, max_warp=0.2):
+    # Simuliere einfache zeitliche Verzerrung durch zufällige Shifts
+    warped = window.clone()
+    for i in range(window.shape[2]):  # für jede Variable
+        shift = random.randint(-int(max_warp * window.shape[1]), int(max_warp * window.shape[1]))
+        warped[:, :, i] = torch.roll(window[:, :, i], shifts=shift, dims=0)
     return warped
 
-
-def augment_window(window, noise_std=0.01, scale_range=(0.95, 1.05), use_warping=True):
-    """
-    Kombinierte Augmentierung: scaling + jittering + optional warping
-    """
-    # Scaling
-    scale = np.random.uniform(*scale_range, size=(1, window.shape[1]))
-    scale = torch.tensor(scale, dtype=window.dtype, device=window.device)
-    window = window * scale
-
-    # Jittering
-    noise = torch.randn_like(window) * noise_std
-    window = window + noise
-
-    # Optional: Warping
-    if use_warping:
+def augment_window(window):
+    # Wende eine zufällige Kombination von Augmentierungen an
+    if random.random() < 0.33:
+        window = jitter(window)
+    if random.random() < 0.33:
+        window = scaling(window)
+    if random.random() < 0.33:
         window = time_warp(window)
-
     return window
 
-
 def augment_batch(batch_windows):
-    return torch.stack([augment_window(w) for w in batch_windows])
+    # Erwartet: batch_windows.shape = (batch_size, n_patches, patch_size, n_channels)
+    augmented = []
+    for w in batch_windows:
+        aug = augment_window(w)
+        augmented.append(aug)
+    return torch.stack(augmented)

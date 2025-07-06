@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class StudentNet(nn.Module):
-    def __init__(self, input_dim=2, patch_size=6, embedding_dim=128, n_heads=8, intermediate_dim=64, n_prototypes=32):
+    def __init__(self, input_dim, output_dim, patch_size=6, embedding_dim=128, n_heads=8, intermediate_dim=64, n_prototypes=32):
         super(StudentNet, self).__init__()
 
         # Lineares Embedding pro Patch

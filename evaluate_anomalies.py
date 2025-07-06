@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from teacher_model import TeacherNet
 from student_model import StudentNet
 from data_preparation import prepare_data, create_patches
-from analysis import load_data
+from Analysis import load_data
 from prototype_selection import select_topk_prototypes
 import numpy as np
 

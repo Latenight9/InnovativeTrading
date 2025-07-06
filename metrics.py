@@ -56,9 +56,6 @@ def event_based_scores(y_true, y_pred, threshold=0.5):
 
 
 def accuracy(y_true, y_pred, threshold=0.5):
-    """
-    Klassische Accuracy (z. B. für UCR-Datensätze)
-    """
     if y_pred.dtype != np.bool_:
         y_pred = (y_pred >= threshold).astype(int)
     return np.mean(y_true == y_pred)
