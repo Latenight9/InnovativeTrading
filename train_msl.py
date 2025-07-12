@@ -24,7 +24,7 @@ EPOCHS = 50
 PATIENCE = 5
 MIN_DELTA = 1e-4
 LR = 1e-4
-LR_TEACHER = 1e-5
+LR_TEACHER = 1e-4
 LAMBDA_CE = 0.5  # Anteil des Contrastive Loss
 
 def train_on_group(file_list, input_dim, model_name):

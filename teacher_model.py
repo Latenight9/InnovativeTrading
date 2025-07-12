@@ -15,6 +15,7 @@ class TeacherNet(nn.Module):
 
         # === Lineares Patch-Embedding ===
         self.linear_embedding = nn.Linear(patch_size * input_dim, embedding_dim)
+        self.input_norm = nn.InstanceNorm1d(self.patch_size, affine=False)
 
         # === GPT2-Konfiguration ===
         
@@ -38,6 +39,8 @@ class TeacherNet(nn.Module):
         assert D == self.input_dim and P == self.patch_size and N == self.n_patches
 
         x = x.view(B, N, P * D)  # (B, N, P*D)
+        x = x.permute(0, 2, 1)             # (B, P*D, N)
+        x = self.input_norm(x).permute(0, 2, 1)  # zurück zu (B, N, P*D)
         x = self.linear_embedding(x)  # (B, N, embedding_dim)
 
 

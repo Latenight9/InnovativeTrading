@@ -6,7 +6,7 @@ from teacher_model import TeacherNet
 from student_model import StudentNet
 from data_preparation import prepare_data
 from evaluate_anomalies import compute_anomaly_scores
-from metrics import event_based_scores
+from metrics_affiliation import affiliation_precision_recall_f1
 from transformers import GPT2Model
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -86,7 +86,7 @@ def evaluate_file(fname):
     # Event-basierte Auswertung
     threshold = np.percentile(scores, 95)  # Top 5% als Anomalien
     pred_events = (scores >= threshold).astype(int)
-    precision, recall, f1 = event_based_scores(labels[WINDOW_SIZE-1:], pred_events)
+    precision, recall, f1 = affiliation_precision_recall_f1(labels[WINDOW_SIZE - 1:], pred_events)
     print(f"📊 Event-based: Precision={precision:.4f}, Recall={recall:.4f}, F1={f1:.4f}")
     return f1
 

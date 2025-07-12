@@ -14,12 +14,6 @@ def create_windows(df, window_size, step_size):
     return np.array(windows)
 
 
-def normalize_windows(windows):
-    means = np.mean(windows, axis=1, keepdims=True)
-    stds = np.std(windows, axis=1, keepdims=True) + 1e-8
-    return (windows - means) / stds
-
-
 def create_patches(windows, patch_size=6):
     n_windows, window_size, n_assets = windows.shape
     patches = []
@@ -34,6 +28,5 @@ def create_patches(windows, patch_size=6):
 
 def prepare_data(df, window_size, step_size, patch_size=6):
     windows = create_windows(df, window_size, step_size)
-    normalized = normalize_windows(windows)
-    patched = create_patches(normalized, patch_size)
+    patched = create_patches(windows, patch_size)
     return patched
