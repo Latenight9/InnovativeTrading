@@ -1,71 +1,34 @@
 import torch
 import torch.nn.functional as F
 
-def knowledge_distillation_loss(student_out, teacher_out, labels):
+
+def knowledge_distillation_loss(z, c, z_aug, c_aug):
     """
-    Berechnet den KD-Loss zwischen Student- und Teacher-Ausgabe (Repräsentationen).
-    Entspricht Formel (5) im Paper.
-    
-    ℓ(z, c) = exp(-‖z - c‖²)
-    L_kd = - (1 - y) * log(ℓ) - y * log(1 - ℓ)
-    
-    Args:
-        student_out: Tensor (batch, emb_dim)
-        teacher_out: Tensor (batch, emb_dim)
-        labels: Tensor (batch,) – 0 = normal, 1 = anomal
-    
-    Returns:
-        Scalar loss
+    KD Loss gemäß Paper (Formel 5):
+    L_kd = ||z - c||^2 - log(1 - exp(-||z^a - c^a||^2))
     """
-    # Quadratdifferenz
-    mse = F.mse_loss(student_out, teacher_out, reduction='none')  # (batch, emb_dim)
-    dist = mse.sum(dim=1)  # ‖z - c‖² → (batch,)
-
-    sim = torch.exp(-dist)  # ℓ(z, c) = exp(−‖z - c‖²)
-
-    # Binary Log Loss entsprechend Ground Truth
-    loss = - (1 - labels) * torch.log(sim + 1e-8) \
-           - labels * torch.log(1 - sim + 1e-8)
-
+    dist_orig = F.mse_loss(z, c, reduction='none').sum(dim=1)
+    dist_aug = F.mse_loss(z_aug, c_aug, reduction='none').sum(dim=1)
+    loss = dist_orig - torch.log(1 - torch.exp(-dist_aug) + 1e-8)
     return loss.mean()
 
 
-def contrastive_loss(original_feat, augmented_feat):
+def contrastive_loss(c_orig, c_aug):
     """
-    Vergleich zwischen Original- und Augmentiertem Feature (beide vom Student).
-    Entspricht Formel (6) im Paper:
-    L_ce = 1 - cos(z, z_a)
-    
-    Args:
-        original_feat: Tensor (batch, emb_dim)
-        augmented_feat: Tensor (batch, emb_dim)
-    
-    Returns:
-        Scalar loss
+    Contrastive Loss gemäß Paper (Formel 6):
+    L_ce = -cosine_similarity(c_orig, c_aug)
     """
-    # Cosine Similarity
-    original_feat = F.normalize(original_feat, dim=1)
-    augmented_feat = F.normalize(augmented_feat, dim=1)
-
-    cos_sim = (original_feat * augmented_feat).sum(dim=1)  # (batch,)
-    return (1 - cos_sim).mean()  # Je höher cos_sim, desto niedriger der Verlust
+    orig_norm = F.normalize(c_orig, dim=1)
+    aug_norm = F.normalize(c_aug, dim=1)
+    cos_sim = (orig_norm * aug_norm).sum(dim=1)  # (batch,)
+    return -cos_sim.mean()
 
 
-def total_loss(student_out, teacher_out, student_aug_out, labels, lambda_ce=1.0):
+def total_loss(z, c, z_aug, c_aug, c_orig, c_aug_teacher, lambda_ce=0.5):
     """
-    Kombinierter Loss aus KD und Contrastive Loss.
-
-    Args:
-        student_out: Originalausgabe des Student
-        teacher_out: Ausgabe des Teacher
-        student_aug_out: Student-Ausgabe für augmentiertes Fenster
-        labels: Ground truth labels (0 = normal, 1 = anomal)
-        lambda_ce: Gewichtung für den Contrastive Loss
-
-    Returns:
-        Gesamtverlust, Einzelverluste
+    Gesamtverlust gemäß Formel (7):
+    L_total = L_kd + λ * L_ce
     """
-    l_kd = knowledge_distillation_loss(student_out, teacher_out, labels)
-    l_ce = contrastive_loss(student_out, student_aug_out)
-    total = l_kd + lambda_ce * l_ce
-    return total, l_kd, l_ce
+    l_kd = knowledge_distillation_loss(z, c, z_aug, c_aug)
+    l_ce = contrastive_loss(c_orig, c_aug_teacher)
+    return l_kd + lambda_ce * l_ce, l_kd, l_ce

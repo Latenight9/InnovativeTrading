@@ -1,37 +1,51 @@
 import torch
-import random
 
-def jitter(window, sigma=0.01):
-    noise = torch.normal(0.0, sigma, size=window.shape).to(window.device)
-    return window + noise
+def jitter(x, sigma=0.4):
+    return x + torch.randn_like(x) * sigma
 
-def scaling(window, sigma=0.1):
-    # Skaliere nur entlang der Feature-Dimension (letzte Achse)
-    scale = torch.normal(1.0, sigma, size=(1, 1, window.shape[2])).to(window.device)
-    return window * scale
+def scaling(x, sigma=0.5):
+    _, P, D = x.shape
+    scale = torch.randn(1, 1, D, device=x.device) * sigma + 1.0
+    return x * scale
 
-def time_warp(window, max_warp=0.2):
-    # Simuliere einfache zeitliche Verzerrung durch zufällige Shifts
-    warped = window.clone()
-    for i in range(window.shape[2]):  # für jede Variable
-        shift = random.randint(-int(max_warp * window.shape[1]), int(max_warp * window.shape[1]))
-        warped[:, :, i] = torch.roll(window[:, :, i], shifts=shift, dims=0)
-    return warped
+def time_warp(x, max_warp=0.7):
+    _, P, D = x.shape
+    x_warped = x.clone()
+    shifts = ((2 * torch.rand(1, D, device=x.device) - 1) * int(max_warp * P)).round().int()
+    for d in range(D):
+        x_warped[0, :, d] = torch.roll(x[0, :, d], shifts=shifts[0, d].item(), dims=0)
+    return x_warped
 
-def augment_window(window):
-    # Wende eine zufällige Kombination von Augmentierungen an
-    if random.random() < 0.33:
-        window = jitter(window)
-    if random.random() < 0.33:
-        window = scaling(window)
-    if random.random() < 0.33:
-        window = time_warp(window)
-    return window
+def augment_batch(batch_windows, segment_ratio=1/3):
+    """
+    Augmentiert pro Sample ein zufälliges Segment mit Länge ≈ segment_ratio * WINDOW_SIZE
+    """
+    B, N, P, D = batch_windows.shape  # z. B. (B, 4, 6, D)
+    total_length = N * P             # z. B. 24
+    segment_len = max(1, int(total_length * segment_ratio))
 
-def augment_batch(batch_windows):
-    # Erwartet: batch_windows.shape = (batch_size, n_patches, patch_size, n_channels)
-    augmented = []
-    for w in batch_windows:
-        aug = augment_window(w)
-        augmented.append(aug)
-    return torch.stack(augmented)
+    augmented = batch_windows.clone()
+    for i in range(B):
+        # --- Flache Zeitreihe für Zugriff über Fenstergrenzen hinweg ---
+        flat = batch_windows[i].view(-1, D)  # (N*P, D)
+
+        # --- Segmentposition bestimmen ---
+        start = torch.randint(0, total_length - segment_len + 1, (1,)).item()
+        end = start + segment_len
+        segment = flat[start:end].clone()
+
+        # --- Augmentationstyp wählen ---
+        aug_type = torch.randint(0, 3, (1,)).item()
+        if aug_type == 0:
+            segment = jitter(segment, sigma=0.4)
+        elif aug_type == 1:
+            segment = scaling(segment.unsqueeze(0), sigma=0.5).squeeze(0)
+        elif aug_type == 2:
+            segment = time_warp(segment.unsqueeze(0), max_warp=0.7).squeeze(0)
+
+        # --- Zurückschreiben ---
+        flat[start:end] = segment
+        augmented[i] = flat.view(N, P, D)
+
+    return augmented
+

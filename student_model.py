@@ -2,63 +2,86 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 class StudentNet(nn.Module):
-    def __init__(self, input_dim, output_dim, patch_size=6, embedding_dim=128, n_heads=8, intermediate_dim=64, n_prototypes=32):
+    def __init__(self, input_dim, output_dim=128, patch_size=6, embedding_dim=128,
+                 n_heads=8, intermediate_dim=64, n_prototypes=32, num_patches=4):
         super(StudentNet, self).__init__()
 
-        # Lineares Embedding pro Patch
-        self.embedding = nn.Linear(patch_size * input_dim, embedding_dim)
+        self.input_dim = input_dim
+        self.patch_size = patch_size
+        self.embedding_dim = embedding_dim
+        self.n_prototypes = n_prototypes
+        self.num_patches = num_patches
 
-        # Cross-Attention: Q = Input, K/V = Prototypen
-        self.attention = nn.MultiheadAttention(embed_dim=embedding_dim, num_heads=n_heads, batch_first=True)
+        self.patch_norm = nn.LayerNorm(patch_size)
+        self.proto_norm = nn.LayerNorm(patch_size)
 
-        # Feedforward Layer nach Attention
+        self.embedding = nn.Linear(patch_size, embedding_dim)
+        self.prototype_projection = nn.Linear(patch_size, embedding_dim)
+
         self.ffn = nn.Sequential(
             nn.Linear(embedding_dim, intermediate_dim),
             nn.ReLU(),
             nn.Linear(intermediate_dim, embedding_dim)
         )
 
-        # Trainierbare Prototypen (werden später per Auswahl gefiltert)
-        self.prototypes = nn.Parameter(torch.randn(n_prototypes, embedding_dim))
+        self.norm1 = nn.LayerNorm(embedding_dim)
+        self.norm2 = nn.LayerNorm(embedding_dim)
+        self.output_layer = nn.Linear(embedding_dim * num_patches * input_dim, output_dim)
 
-    def forward(self, x, selected_proto_ids=None):
-        """
-        x: Tensor (batch, n_patches, patch_size, input_dim)
-        selected_proto_ids: Tensor (batch, top_k), optional – Indexe der Prototypen
-        """
+        # (D * M, P)
+        self.prototypes = nn.Parameter(torch.randn(input_dim * n_prototypes, patch_size))
 
-        batch_size, n_patches, patch_size, input_dim = x.shape
+    def forward(self, x):
+        B, N, P, D = x.shape  # (Batch, Num_Patches, Patch_Size, Features)
+        assert D == self.input_dim and P == self.patch_size, \
+        f"🔥 Input Error: Erwartet (_, _, {self.patch_size}, {self.input_dim}), aber {x.shape}"
 
-        # ⬛ 1. Flatten der Patches und lineares Embedding
-        x = x.reshape(batch_size, n_patches, patch_size * input_dim)
-        x = self.embedding(x)  # (batch, n_patches, embedding_dim)
+        # === 🔹1. Input-Normalisierung pro Patch (feature-wise) ===
+        x = x.permute(0, 1, 3, 2)       # (B, N, D, P)
+        x = self.patch_norm(x)          # LayerNorm über P (letzte Achse)
+        x = x.permute(0, 1, 3, 2)       # zurück zu (B, N, P, D)
 
-        # ⬛ 2. Prototypen-Auswahl vorbereiten
-        if selected_proto_ids is None:
-            # Fallback: alle Prototypen verwenden
-            prototypes = self.prototypes.unsqueeze(0).expand(batch_size, -1, -1)  # (batch, n_proto, emb)
-        else:
-            # Wähle pro Sample die Top-k Prototypen aus
-            prototypes = []
-            for b in range(batch_size):
-                selected = self.prototypes[selected_proto_ids[b]]  # (top_k, emb)
-                prototypes.append(selected)
-            prototypes = torch.stack(prototypes, dim=0)  # (batch, top_k, emb)
 
-        # ⬛ 3. Cross-Attention: Q = x (Input), K/V = Prototypen
-        attn_output, _ = self.attention(query=x, key=prototypes, value=prototypes)  # (batch, n_patches, emb)
+        # === 🔹2. Input flatten für Projektionen ===
+        x_flat = x.permute(0, 1, 3, 2).reshape(B * N * D, P)  # (B*N*D, P)
 
-        # ⬛ 4. Feedforward-Netzwerk
-        x = self.ffn(attn_output)  # (batch, n_patches, emb)
+        # === 🔹3. Prototypen vorbereiten ===
+        protos = self.proto_norm(self.prototypes)  # (D*M, P)
 
-        # ⬛ 5. Aggregiere Patches zu Feature-Vektor (letzter Token)
-        features = x[:, -1, :]  # (batch, emb_dim)
+        # === 🔹4. Cosine-Similarity für Prototypenwahl ===
+        x_norm = F.normalize(x_flat, dim=1)  # (B*N*D, P)
+        p_norm = F.normalize(protos, dim=1)  # (D*M, P)
+        sim = torch.matmul(x_norm, p_norm.T)  # (B*N*D, D*M)
+        best_idx = sim.argmax(dim=1)         # (B*N*D,)
+        selected = protos[best_idx].view(B, N, D, P)  # (B, N, D, P)
 
-        # ⬛ 6. Ähnlichkeit zu allen Prototypen (für optionales Logging oder Anomalie-Ranking)
-        proto_norm = F.normalize(self.prototypes, dim=1)      # (n_proto, emb)
-        feat_norm = F.normalize(features, dim=1)              # (batch, emb)
-        sim = torch.matmul(feat_norm, proto_norm.T)           # (batch, n_proto)
+        # === 🔹5. Patch- & Prototyp-Embedding ===
+        input_embed = self.embedding(x_flat).view(B, N, D, self.embedding_dim)
+        proto_embed = self.prototype_projection(selected.view(-1, P)).view(B, N, D, self.embedding_dim)
 
-        return features, sim
+        # === 🔹6. Formel (3): Gewichtung (attention-ähnlich) ===
+        qw = F.normalize(input_embed, dim=-1)
+        kw = F.normalize(input_embed, dim=-1)
+        km = F.normalize(proto_embed, dim=-1)
+
+        dot_kw = torch.sum(qw * kw, dim=-1, keepdim=True)  # (B, N, D, 1)
+        dot_km = torch.sum(qw * km, dim=-1, keepdim=True)  # (B, N, D, 1)
+
+        all_scores = torch.cat([dot_kw, dot_km], dim=-1)  # (B, N, D, 2)
+        weights = F.softmax(all_scores, dim=-1)
+        sw, sm = weights[..., 0:1], weights[..., 1:2]
+
+        # === 🔹7. Formel (4): Lineare Kombination ===
+        out = sw * kw + sm * km  # (B, N, D, E)
+
+        # === 🔹8. Transformer-like Block ===
+        x = self.norm1(input_embed + out)
+        x_ffn = self.ffn(x)
+        z = self.norm2(x + x_ffn)  # (B, N, D, E)
+
+        # === 🔹9. Flatten + Projektion ===
+        z_flat = z.contiguous().view(B, -1)
+        assert z_flat.shape[1] == self.output_layer.in_features, \
+        f"🔥 Dimension Error: {z_flat.shape[1]} != {self.output_layer.in_features}"
+        return self.output_layer(z_flat) # (B, output_dim)
