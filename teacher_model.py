@@ -15,7 +15,7 @@ class TeacherNet(nn.Module):
 
         # === Lineares Patch-Embedding ===
         self.linear_embedding = nn.Linear(patch_size * input_dim, embedding_dim)
-        self.input_norm = nn.InstanceNorm1d(self.patch_size, affine=False)
+        self.input_norm = nn.LayerNorm(patch_size * input_dim)
 
         # === GPT2-Konfiguration ===
         
@@ -38,15 +38,14 @@ class TeacherNet(nn.Module):
         B, N, P, D = x.shape
         assert D == self.input_dim and P == self.patch_size and N == self.n_patches
 
-        x = x.view(B, N, P * D)  # (B, N, P*D)
-        x = x.permute(0, 2, 1)             # (B, P*D, N)
-        x = self.input_norm(x).permute(0, 2, 1)  # zurück zu (B, N, P*D)
-        x = self.linear_embedding(x)  # (B, N, embedding_dim)
+        x = x.view(B, N, P * D)           # (B, N, P*D)
+        x = self.input_norm(x)           # LayerNorm → Norm pro Fenster
 
-
-        gpt_out = self.llm(inputs_embeds=x)     # (B, N, E)
-        gpt_last = gpt_out.last_hidden_state    # (B, N, E)
+        x = self.linear_embedding(x)     # (B, N, embedding_dim)
+        gpt_out = self.llm(inputs_embeds=x)
+        gpt_last = gpt_out.last_hidden_state
 
         x_flat = gpt_last.contiguous().view(B, -1)
-        c = self.flatten_proj(x_flat)           # (B, output_dim)
+        c = self.flatten_proj(x_flat)
         return c
+

@@ -122,9 +122,12 @@ def main():
         data = np.load(os.path.join(DATA_DIR, fname))
         grouped.setdefault(data.shape[1], []).append(fname)
 
-    for dim, file_list in grouped.items():
-        print(f"🔧 Training für Featureanzahl {dim} gestartet...")
-        train_on_group(file_list, dim, f"student_model_{dim}.pt")
+    target_dim = 55
+    if target_dim in grouped:
+        print(f"🔧 Training für Featureanzahl {target_dim} gestartet...")
+        train_on_group(grouped[target_dim], target_dim, f"student_model_{target_dim}.pt")
+    else:
+        print(f"⚠️ Keine Daten mit Featureanzahl {target_dim} gefunden!")
 
 if __name__ == "__main__":
     main()

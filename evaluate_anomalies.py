@@ -34,7 +34,12 @@ def compute_anomaly_scores(teacher, student, X):
             score = diff.sum(dim=1).cpu().numpy()
             anomaly_scores.extend(score)
 
-    return np.array(anomaly_scores)
+    scores = np.array(anomaly_scores)
+
+    # 📏 [NEU] Normalisierung auf [0, 1] für stabile Percentile
+    scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-8)
+
+    return scores
 
 def main():
     print("Dieses Modul stellt compute_anomaly_scores(...) bereit.")
