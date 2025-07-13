@@ -28,7 +28,7 @@ class TeacherNet(nn.Module):
 
     def _freeze_llm(self):
         for name, param in self.llm.named_parameters():
-            if 'ln' in name or 'wpe' in name or 'wte' in name:
+            if 'ln' in name or 'wpe' in name:
                 param.requires_grad = True  # LayerNorm + Positional Embedding = trainierbar
             else:
                 param.requires_grad = False  # Attention & FF bleiben frozen
