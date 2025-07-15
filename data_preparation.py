@@ -4,9 +4,6 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 import os
 
-# 📁 Wo der Scaler gespeichert/geladen wird
-SCALER_PATH = "scaler.pkl"
-
 def create_windows(data, window_size, step_size):
     windows = []
     for i in range(0, len(data) - window_size + 1, step_size):
@@ -24,21 +21,25 @@ def create_patches(windows, patch_size=6):
         patches.append(window_patches)
     return np.array(patches)
 
-def prepare_data(df, window_size, step_size, patch_size=6, train=True):
+def prepare_data(df, window_size, step_size, patch_size=6, train=True, target_dim=None):
     if isinstance(df, pd.DataFrame):
         data = df.values
     else:
         data = df
 
-    # 🔍 Skalierung
     if train:
+        if target_dim is None:
+            raise ValueError("target_dim muss beim Training angegeben werden.")
         scaler = StandardScaler()
         data = scaler.fit_transform(data)
-        joblib.dump(scaler, SCALER_PATH)  # 💾 Speichern für später
+        joblib.dump(scaler, f"scaler_{target_dim}.pkl")
     else:
-        if not os.path.exists(SCALER_PATH):
-            raise FileNotFoundError("Scaler-Datei nicht gefunden: erst Training durchführen!")
-        scaler = joblib.load(SCALER_PATH)
+        if target_dim is None:
+            raise ValueError("target_dim muss beim Laden angegeben werden.")
+        scaler_path = f"scaler_{target_dim}.pkl"
+        if not os.path.exists(scaler_path):
+            raise FileNotFoundError(f"Scaler-Datei '{scaler_path}' nicht gefunden.")
+        scaler = joblib.load(scaler_path)
         data = scaler.transform(data)
 
     windows = create_windows(data, window_size, step_size)

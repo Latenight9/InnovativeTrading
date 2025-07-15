@@ -54,7 +54,7 @@ class StudentNet(nn.Module):
         self.embedding = nn.Linear(patch_size, embedding_dim)
         self.prototype_projection = nn.Linear(patch_size, embedding_dim)
 
-        self.prototypes = nn.Parameter(torch.randn(D, 32, patch_size))
+        self.prototypes = nn.Parameter(torch.randn(input_dim, n_prototypes, patch_size))
         self.pos_enc = PositionalEncoding(d_model=embedding_dim, max_len=num_patches * input_dim)
 
         self.transformer_blocks = nn.Sequential(*[
