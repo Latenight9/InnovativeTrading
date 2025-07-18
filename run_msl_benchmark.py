@@ -53,8 +53,6 @@ def evaluate_file(fname):
     if dim != 55:
         return None
     
-    scaler = joblib.load(f"scaler_{dim}.pkl")
-    data = scaler.transform(data)
     labels = np.load(label_path)
     model_path = f"student_model_{dim}.pt"
     num_patches = WINDOW_SIZE // PATCH_SIZE
@@ -62,7 +60,7 @@ def evaluate_file(fname):
     if not os.path.exists(model_path):
         return None
 
-    X = prepare_data(data, WINDOW_SIZE, STEP_SIZE, patch_size=PATCH_SIZE, target_dim=dim)
+    X = prepare_data(data, WINDOW_SIZE, STEP_SIZE, patch_size=PATCH_SIZE, target_dim=dim, train=False)
 
     teacher = TeacherNet(
         input_dim=dim,

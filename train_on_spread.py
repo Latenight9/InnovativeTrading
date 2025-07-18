@@ -128,8 +128,10 @@ def train_spread_model(tickers):
         if avg_loss < best_loss - MIN_DELTA:
             best_loss = avg_loss
             patience_counter = 0
-            torch.save(student.state_dict(), "student_spread_model.pt")
-            torch.save(teacher.state_dict(), "teacher_spread_model.pt")
+            pair_name = f"{tickers[0]}_{tickers[1]}"
+            torch.save(student.state_dict(), f"student_model_{pair_name}.pt")
+            torch.save(teacher.state_dict(), f"teacher_model_{pair_name}.pt")
+
             print("💾 Modelle gespeichert.")
         else:
             patience_counter += 1

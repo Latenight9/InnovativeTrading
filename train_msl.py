@@ -32,12 +32,12 @@ def train_on_group(file_list, input_dim, model_name):
     np.random.seed(42)
 
     num_patches = WINDOW_SIZE // PATCH_SIZE
-
+    
     # === Daten laden ===
     all_loaders = []
     for fname in file_list:
         data = np.load(os.path.join(DATA_DIR, fname))
-        windows = prepare_data(data, WINDOW_SIZE, STEP_SIZE, patch_size=PATCH_SIZE)
+        windows = prepare_data(data, WINDOW_SIZE, STEP_SIZE, patch_size=PATCH_SIZE,target_dim=input_dim)
         dataset = TensorDataset(torch.tensor(windows, dtype=torch.float32))
         all_loaders.append(DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True))
 
