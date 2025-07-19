@@ -10,11 +10,11 @@ from statsmodels.tsa.vector_ar.vecm import coint_johansen
 from statsmodels.tsa.stattools import adfuller
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
-from config import ADF_THRESHOLD, DATA_MODE, LOOKBACK_PERIOD# zentrale Schwelle für ADF-Test
+from config import ADF_THRESHOLD, DATA_MODE 
 
 
 # 1️⃣ Daten laden
-def load_data(tickers, start_date=None, end_date=None, interval="1h",since_days=100):
+def load_data(tickers, start_date=None, end_date=None, interval="1h",since_days=730):
     if DATA_MODE in ["stocks", "chan_example"]:
         print("⬇️ Lade Preisdaten von Yahoo Finance...")
 
