@@ -13,8 +13,8 @@ from chan_example import get_chan_example_tickers
 
 # === Direkte Konfiguration ===
 TICKERS = get_chan_example_tickers()  # Erwartet zwei Ticker
-START_DATE = "2006-05-01"
-END_DATE = "2010-04-01"
+START_DATE = "2010-04-01"
+END_DATE = "2012-04-09"
 INTERVAL = "1d"
 LOOKBACK_PERIOD = 20
 INITIAL_CAPITAL = 10_000.0
@@ -65,7 +65,7 @@ def load_models(pair_name, dim):
     return teacher, student
 
 
-def build_positions(spread, zscore, scores, entry_percentile=85, exit_threshold=0.5):
+def build_positions(spread, zscore, scores, entry_percentile=85, exit_threshold=0.3):
     entry_threshold = np.percentile(scores, entry_percentile)
     in_position = False
     last_position = 0
@@ -100,7 +100,7 @@ def test_chan_strategy():
     zscore = (spread - spread.rolling(LOOKBACK_PERIOD).mean()) / spread.rolling(LOOKBACK_PERIOD).std()
     zscore = zscore.fillna(0)
 
-    # 4. Modelle laden
+    # 4. Scaler laden
     dim = 1
     
     X = prepare_data(
