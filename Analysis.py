@@ -67,12 +67,13 @@ def plot_top_pairs(top_pairs):
         color='green'
     )
     plt.xlabel("Pearson-Korrelationskoeffizient")
-    plt.ylabel("Aktienpaare")
-    plt.title("Top 15 höchsten Korrelationen zwischen Aktien")
+    plt.ylabel("Paare")
+    plt.title("Top 15 höchsten Korrelationen")
     plt.xlim(0.85, 1)
     plt.xticks(np.arange(0.85, 1.1, 0.02))
     plt.gca().invert_yaxis()
     plt.grid(True)
+    plt.tight_layout()
     plt.show()
 
 # 3️⃣ Johansen-Test für ein Paar

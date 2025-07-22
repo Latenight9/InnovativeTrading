@@ -11,14 +11,16 @@ from teacher_model import TeacherNet
 from student_model import StudentNet
 from losses import total_loss
 from augment_time_series import augment_batch
+from config import DATA_MODE
 
 
 # === Konfiguration ===
-TICKERS = ["GLD", "USO"]  # oder z.B. ["BTCUSDT", "ETHUSDT"]
+TICKERS = ["UNIUSDT", "ADAUSDT"]  # oder z.B. ["BTCUSDT", "ETHUSDT"]
 START_DATE = "2006-05-01"
 END_DATE = "2010-04-01"
-INTERVAL = "1d"
+INTERVAL = "1h"
 LOOKBACK_PERIOD = 20
+SINCE_DAYS = 730
 
 # AnomalyLLM Parameter
 WINDOW_SIZE = 120
@@ -38,8 +40,11 @@ LAMBDA_CE = 0.5
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def train_spread_model(tickers):
-    # === Daten laden ===
-    prices_df = load_data(tickers, START_DATE, END_DATE, interval=INTERVAL)
+    if DATA_MODE == "crypto":
+        prices_df = load_data(tickers, interval=INTERVAL, since_days=SINCE_DAYS)
+    else:
+        prices_df = load_data(tickers, start_date=START_DATE, end_date=END_DATE, interval=INTERVAL)
+
     p1 = prices_df[tickers[0]]
     p2 = prices_df[tickers[1]]
 

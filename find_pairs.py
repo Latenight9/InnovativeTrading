@@ -12,7 +12,7 @@ END_DATE = "2010-04-01"
 INTERVAL = "1d"
 
 # Für Crypto:
-SINCE_DAYS = 100
+SINCE_DAYS = 365
 CRYPTO_INTERVAL = "1h"
 
 def main():
