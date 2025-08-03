@@ -34,18 +34,20 @@ class TeacherNet(nn.Module):
                 param.requires_grad = False  # Attention & FF bleiben frozen
 
     def forward(self, x):
-        # Eingabe: (B, N, P, D)
-        B, N, P, D = x.shape
+        x = x.movedim(-1, 2)  # (B, N, D, P)
+        B, N, D, P = x.shape
         assert D == self.input_dim and P == self.patch_size and N == self.n_patches
 
-        x = x.view(B, N, P * D)           # (B, N, P*D)
-        x = self.input_norm(x)           # LayerNorm → Norm pro Fenster
+        x = x.view(B, N, P * D)           # (B, N, D*P)
+        x = self.input_norm(x)
+        x = self.linear_embedding(x)
 
-        x = self.linear_embedding(x)     # (B, N, embedding_dim)
         gpt_out = self.llm(inputs_embeds=x)
         gpt_last = gpt_out.last_hidden_state
 
         x_flat = gpt_last.contiguous().view(B, -1)
         c = self.flatten_proj(x_flat)
         return c
+
+
 

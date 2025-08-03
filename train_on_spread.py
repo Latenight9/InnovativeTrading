@@ -4,7 +4,7 @@ import os
 import torch
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
-
+import torch.nn.functional as F
 from Analysis import load_data, calculate_rolling_beta
 from data_preparation import prepare_data
 from teacher_model import TeacherNet
@@ -16,8 +16,8 @@ from config import DATA_MODE
 
 # === Konfiguration ===
 TICKERS = ["UNIUSDT", "ADAUSDT"]  # oder z.B. ["BTCUSDT", "ETHUSDT"]
-START_DATE = "2006-05-01"
-END_DATE = "2010-04-01"
+START_DATE = "2020-01-01"
+END_DATE = "2024-12-01"
 INTERVAL = "1h"
 LOOKBACK_PERIOD = 20
 SINCE_DAYS = 730
@@ -115,9 +115,9 @@ def train_spread_model(tickers):
             z_aug = student(batch_aug)
             c = teacher(batch)
             c_aug = teacher(batch_aug)
-
+            
             loss, loss_kd, loss_ce = total_loss(z, c, z_aug, c_aug, c, c_aug, lambda_ce=LAMBDA_CE)
-
+            
             optimizer_student.zero_grad()
             optimizer_teacher.zero_grad()
 

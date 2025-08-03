@@ -68,6 +68,7 @@ class StudentNet(nn.Module):
         B, N, P, D = x.shape
         assert D == self.input_dim and P == self.patch_size
 
+        x = x.movedim(-1, 2)
         x_flat = x.view(B * N * D, P)
         x_normed = F.normalize(x_flat, dim=1)
         x_norm = x_normed.view(B, N, D, P)
@@ -100,4 +101,5 @@ class StudentNet(nn.Module):
 
         z = seq.contiguous().view(B, -1)
         return self.output_layer(z)
+        
 
