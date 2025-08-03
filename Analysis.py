@@ -11,6 +11,7 @@ from statsmodels.tsa.stattools import adfuller
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 from config import ADF_THRESHOLD, DATA_MODE 
+import re
 
 
 # 1️⃣ Daten laden
@@ -176,6 +177,35 @@ def generate_positions_from_zscore(spread, lookback):
     zscore = (spread - spread.rolling(lookback).mean()) / spread.rolling(lookback).std()
     zscore = zscore.fillna(0)
     return -zscore
+
+def plot_spread(pair_key, pair_data):
+   
+    spread = pair_data["Spread"]
+    mean = spread.mean()
+
+    # Plot
+    plt.figure(figsize=(10, 5))
+    plt.plot(spread.index, spread, label='Spread', color='blue')
+    plt.axhline(mean, color='gray', linestyle='--', label='Mittelwert')
+    plt.title(f"Spread zwischen {pair_key[0]} und {pair_key[1]}")
+    plt.xlabel("Zeit")
+    plt.ylabel("Spread")
+    plt.legend()
+    plt.grid(True)
+    plt.xlim(spread.index[0], spread.index[300])
+    plt.tight_layout()
+
+    # Sicheren Dateinamen erzeugen
+    def safe_name(name):
+        return re.sub(r"[^\w\-]", "_", name)
+
+    filename = f"spread_{safe_name(pair_key[0])}_{safe_name(pair_key[1])}.png"
+    plt.savefig(filename)
+    print(f"✅ Plot gespeichert als: {filename}")
+
+    plt.show()
+
+
 
 # 🖨️ Ausgabe
 def print_results(results_dict):

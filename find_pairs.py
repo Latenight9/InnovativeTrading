@@ -1,6 +1,6 @@
 from Analysis import (
     load_data, calculate_top_correlations, run_johansen_tests,
-    check_spread_stationarity, plot_top_pairs
+    check_spread_stationarity, plot_top_pairs, plot_spread
 )
 from crypto import get_crypto_tickers
 from stock import get_stock_tickers
@@ -34,6 +34,11 @@ def main():
     johansen_results = run_johansen_tests(top_pairs, prices)
 
     stationary_pairs = check_spread_stationarity(prices, johansen_results)
+    
+    for pair_key, pair_data in stationary_pairs.items():
+        print(f"\n📉 Plot für {pair_key[0]} - {pair_key[1]}")
+        plot_spread(pair_key, pair_data)
+        break  
 
     print("\n📌 Stationäre Paare:")
     for pair in stationary_pairs:

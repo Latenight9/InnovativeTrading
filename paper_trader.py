@@ -1,55 +1,54 @@
-import time
-import threading
-import numpy as np
-import pandas as pd
-import torch
+import time, threading, asyncio
+import numpy as np, pandas as pd, torch
 from datetime import datetime
 from collections import deque
 from binance.client import Client
-from binance.websockets import BinanceSocketManager
 from binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
+from binance import ThreadedWebsocketManager
 import statsmodels.api as sm
-
+import matplotlib
+matplotlib.use('Agg')  # wichtig: kein GUI-Fenster im Thread
+import matplotlib.pyplot as plt
 from binance_keys import API_KEY, API_SECRET
 from evaluate_anomalies import compute_anomaly_scores
 from teacher_model import TeacherNet
 from student_model import StudentNet
 from data_preparation import prepare_data
 
-# === KONFIGURATION ===
-TICKERS = ["BTCUSDT", "ETHUSDT"]
+# === PARAMETER ===
+TICKERS = ["UNIUSDT", "ADAUSDT"]
 PAIR_NAME = f"{TICKERS[0]}_{TICKERS[1]}"
 LOOKBACK = 20
 WINDOW_SIZE = 120
 PATCH_SIZE = 10
 STEP_SIZE = 1
-ENTRY_PERCENTILE = 85
+ENTRY_PERCENTILE = 50
 EXIT_THRESHOLD = 0.3
 N_PROTOTYPES = 32
 EMBEDDING_DIM = 768
 OUTPUT_DIM = 128
-CHECK_INTERVAL = 60  # Sekunden
-MAX_USD_RISK = 50
+CHECK_INTERVAL = 15
+MAX_USD_RISK = 100
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# === BINANCE CLIENT ===
+if asyncio.get_event_loop().__class__.__name__ != 'SelectorEventLoop':
+    asyncio.set_event_loop(asyncio.SelectorEventLoop())
+
+# === Binance Testnet Setup ===
 client = Client(API_KEY, API_SECRET)
 client.API_URL = 'https://testnet.binance.vision/api'
-
 balance_info = client.get_asset_balance(asset='USDT')
 equity = float(balance_info['free'])
 print(f"💰 Startkapital laut Binance: {equity:.2f} USDT")
 
-# === LIVE-PREISPUFFER ===
 price_buffer = {TICKERS[0]: deque(maxlen=LOOKBACK + 200),
                 TICKERS[1]: deque(maxlen=LOOKBACK + 200)}
 
-# === STATUSVARIABLEN ===
 position = 0
 entry_price = None
 equity_curve = [equity]
 trades = []
-running = True  # Steuerung der Strategie-Loop
+running = True
 
 # === MODELLE LADEN ===
 def load_models():
@@ -75,19 +74,32 @@ def load_models():
     student.load_state_dict(torch.load(f"student_model_{PAIR_NAME}.pt", map_location=DEVICE))
     teacher.eval()
     student.eval()
+
     return teacher, student
 
 teacher, student = load_models()
 
-# === REGRESSION für Hedge Ratio
+import matplotlib.pyplot as plt
+
+def plot_zscore(zscore_series):
+    plt.figure(figsize=(10, 3))
+    plt.plot(zscore_series, label='Z-Score')
+    plt.axhline(0, color='gray', linestyle='--')
+    plt.axhline(EXIT_THRESHOLD, color='green', linestyle=':', label='Exit Threshold')
+    plt.axhline(-EXIT_THRESHOLD, color='green', linestyle=':')
+    plt.title('Z-Score der aktuellen Spread-Serie')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("zscore_live.png")
+    plt.close()
+
 def compute_hedge_ratio(y, x, lookback):
-    y = pd.Series(y).iloc[-lookback:]
-    x = pd.Series(x).iloc[-lookback:]
+    y = pd.Series(y).iloc[-lookback:].reset_index(drop=True)
+    x = pd.Series(x).iloc[-lookback:].reset_index(drop=True)
     x = sm.add_constant(x)
     model = sm.OLS(y, x).fit()
-    return model.params[1]
+    return model.params.iloc[1]
 
-# === PERFORMANCE-BERECHNUNG
 def calculate_performance(equity_series):
     daily_returns = equity_series.pct_change().dropna()
     mean_return = daily_returns.mean()
@@ -98,37 +110,43 @@ def calculate_performance(equity_series):
     max_drawdown = (cumulative_return - cumulative_return.cummax()).min()
     return apr, sharpe, max_drawdown
 
-# === SIGNAL-ERZEUGUNG
+# === SIGNAL-ERZEUGUNG (neu strukturiert) ===
 def generate_signals():
     p1 = pd.Series(price_buffer[TICKERS[0]])
     p2 = pd.Series(price_buffer[TICKERS[1]])
 
-    if len(p1) < LOOKBACK + WINDOW_SIZE:
+    if min(len(p1), len(p2)) < LOOKBACK + WINDOW_SIZE:
         return None
+
 
     beta = compute_hedge_ratio(p1, p2, LOOKBACK)
     spread = p1.values[-WINDOW_SIZE:] - beta * p2.values[-WINDOW_SIZE:]
     spread_series = pd.Series(spread)
     zscore = (spread_series - spread_series.rolling(LOOKBACK).mean()) / spread_series.rolling(LOOKBACK).std()
     zscore = zscore.fillna(0)
+    last_z = zscore.values[-1]
 
     X = prepare_data(spread_series.to_numpy().reshape(-1, 1), WINDOW_SIZE, STEP_SIZE, PATCH_SIZE, train=False, target_dim=1)
     scores = compute_anomaly_scores(teacher, student, X)
     smoothed_score = pd.Series(scores).rolling(3).mean().fillna(0).values[-1]
-
     entry_thresh = np.percentile(scores, ENTRY_PERCENTILE)
-    last_z = zscore.values[-1]
 
     if position == 0 and smoothed_score > entry_thresh:
-        return -np.sign(last_z)
-    elif position != 0 and abs(last_z) < EXIT_THRESHOLD:
-        return 0
-    return None
+        strength = np.clip(abs(last_z) / 2.0, 0.1, 1.0)
+        direction = -np.sign(last_z)
+        return {"type": "entry", "direction": direction, "strength": strength}
 
-# === ORDER-FUNKTION
+    elif position != 0 and abs(last_z) < EXIT_THRESHOLD:
+        return {"type": "exit"}
+
+    #plot_zscore(zscore)
+    
+    return None
+   
+
 def place_order(symbol, side, quantity):
     try:
-        client.create_test_order(
+        client.create_order(
             symbol=symbol,
             side=SIDE_BUY if side == 1 else SIDE_SELL,
             type=ORDER_TYPE_MARKET,
@@ -140,64 +158,77 @@ def place_order(symbol, side, quantity):
         print(f"❌ Orderfehler: {e}")
         return False
 
-# === STRATEGIE-LOOP
+# === STRATEGIE-LOOP ===
 def strategy_loop():
     global position, entry_price, equity, running
 
     while running:
-        if len(price_buffer[TICKERS[0]]) < LOOKBACK + WINDOW_SIZE:
+        if min(len(price_buffer[TICKERS[0]]), len(price_buffer[TICKERS[1]])) < LOOKBACK + WINDOW_SIZE:
             time.sleep(CHECK_INTERVAL)
             continue
 
-        current_price = float(price_buffer[TICKERS[0]][-1])
-        quantity = MAX_USD_RISK / current_price
 
         signal = generate_signals()
-        if signal is not None and signal != position:
-            success = place_order(TICKERS[0], signal, quantity)
-            if success:
-                now = datetime.utcnow()
-                if signal == 0:
-                    exit_price = current_price
-                    pnl = position * (exit_price - entry_price) * quantity
+
+        if signal:
+            now = datetime.utcnow()
+
+            if signal["type"] == "entry":
+                direction = signal["direction"]
+                strength = signal["strength"]
+                current_price = float(price_buffer[TICKERS[0]][-1])
+                quantity = (MAX_USD_RISK * strength) / current_price
+                quantity = round(quantity, 6)
+
+                success = place_order(TICKERS[0], direction, quantity)
+                if success:
+                    entry_price = current_price
+                    position = direction
+                    trades.append({"time": now, "type": "entry", "side": direction, "price": entry_price, "strength": strength})
+                    print(f"✅ Neue Position: {'LONG' if direction == 1 else 'SHORT'} @ {entry_price:.4f} | Stärke: {strength:.2f}")
+
+            elif signal["type"] == "exit":
+                current_price = float(price_buffer[TICKERS[0]][-1])
+                quantity = MAX_USD_RISK / current_price
+                quantity = round(quantity, 6)
+
+                success = place_order(TICKERS[0], -position, quantity)
+                if success:
+                    pnl = position * (current_price - entry_price) * quantity
                     equity += pnl
-                    print(f"💼 Trade geschlossen: PnL = {pnl:.2f} USDT | Equity = {equity:.2f}")
                     trades.append({"time": now, "type": "exit", "pnl": pnl, "equity": equity})
+                    print(f"💼 Trade geschlossen: PnL = {pnl:.2f} USDT | Equity = {equity:.2f}")
                     entry_price = None
                     position = 0
-                else:
-                    entry_price = current_price
-                    position = signal
-                    print(f"✅ Neue Position: {'LONG' if signal == 1 else 'SHORT'} @ {entry_price}")
-                    trades.append({"time": now, "type": "entry", "side": signal, "price": entry_price})
+                    equity_curve.append(equity)
 
-                equity_curve.append(equity)
-
-                if len(trades) % 10 == 0:
-                    equity_series = pd.Series(equity_curve)
-                    apr, sharpe, max_dd = calculate_performance(equity_series)
-                    print(f"\n📊 Performance nach {len(trades)} Trades:")
-                    print(f"   → APR: {apr:.2%} | Sharpe: {sharpe:.2f} | Max DD: {max_dd:.2%}\n")
+                    if len(trades) % 10 == 0:
+                        equity_series = pd.Series(equity_curve)
+                        apr, sharpe, max_dd = calculate_performance(equity_series)
+                        print(f"\n📊 Performance nach {len(trades)} Trades:")
+                        print(f"   → APR: {apr:.2%} | Sharpe: {sharpe:.2f} | Max DD: {max_dd:.2%}\n")
 
         time.sleep(CHECK_INTERVAL)
 
-# === BINANCE WEBSOCKET HANDLER
+# === SOCKET HANDLER ===
 def handle_socket_message(msg):
-    if msg['e'] != 'aggTrade': return
+    if msg['e'] != 'aggTrade':
+        return
     symbol = msg['s']
     price = float(msg['p'])
     if symbol in price_buffer:
         price_buffer[symbol].append(price)
 
-# === START
+# === MAIN ===
 def main():
     global running, position, equity, entry_price
 
     print("🚀 Starte LLM-Paper-Trading über Binance Testnet...")
-    bm = BinanceSocketManager(client)
-    bm.start_aggtrade_socket(TICKERS[0].lower(), handle_socket_message)
-    bm.start_aggtrade_socket(TICKERS[1].lower(), handle_socket_message)
-    bm.start()
+    twm = ThreadedWebsocketManager(api_key=API_KEY, api_secret=API_SECRET, testnet=True)
+    twm.start()
+
+    twm.start_aggtrade_socket(callback=handle_socket_message, symbol=TICKERS[0])
+    twm.start_aggtrade_socket(callback=handle_socket_message, symbol=TICKERS[1])
 
     strategy_thread = threading.Thread(target=strategy_loop)
     strategy_thread.start()
@@ -221,6 +252,8 @@ def main():
                 equity += pnl
                 print(f"✅ Position automatisch geschlossen. Finaler PnL: {pnl:.2f} USDT")
         print("🚪 Strategie sauber beendet.")
+
+    twm.join()
 
 if __name__ == "__main__":
     main()
