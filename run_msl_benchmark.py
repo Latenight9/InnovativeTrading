@@ -24,21 +24,6 @@ TEST_DIR = "data/MSL/test"
 LABEL_DIR = "data/MSL/test_label"
 teacher_loaded_once = set()
 
-def align_labels_to_scores(labels, num_scores, window_size):
-    expected = len(labels) - window_size + 1
-    if expected == num_scores:
-        return labels[window_size - 1:]
-    elif len(labels) == num_scores:
-        return labels
-    elif len(labels) > num_scores:
-        return labels[len(labels) - num_scores:]
-    else:
-        raise ValueError(f"Labels ({len(labels)}) kürzer als Scores ({num_scores})")
-
-def clean_predictions(pred_array, min_event_length=5, join_gap=8):
-    pred_array = binary_closing(pred_array, structure=np.ones(join_gap)).astype(int)
-    pred_array = binary_opening(pred_array, structure=np.ones(min_event_length)).astype(int)
-    return pred_array
 
 def evaluate_file(fname):
     test_path = os.path.join(TEST_DIR, fname)
@@ -91,10 +76,15 @@ def evaluate_file(fname):
     scores = gaussian_filter1d(scores, sigma=1)
     threshold = np.percentile(scores, 85)
     pred_events = (scores >= threshold).astype(int)
-    pred_events = clean_predictions(pred_events, min_event_length=5, join_gap=5)
+    
+    # Länge kürzen – keine Events zerstören
+    min_len = min(len(labels), len(scores))
+    labels = labels[-min_len:]
+    pred_events = pred_events[-min_len:]
 
-    aligned_labels = align_labels_to_scores(labels, len(scores), WINDOW_SIZE)
-    precision, recall, f1 = affiliation_precision_recall_f1(aligned_labels, pred_events)
+# Affiliation-F1 direkt berechnen
+    precision, recall, f1 = affiliation_precision_recall_f1(labels, pred_events)
+
     print(f"{fname:<15} | Precision: {precision:.4f} | Recall: {recall:.4f} | F1: {f1:.4f}")
     return f1
 
