@@ -38,7 +38,7 @@ class TeacherNet(nn.Module):
         B, N, D, P = x.shape
         assert D == self.input_dim and P == self.patch_size and N == self.n_patches
 
-        x = x.view(B, N, P * D)           # (B, N, D*P)
+        x = x.reshape(B, N, P * D)           # (B, N, D*P)
         x = self.input_norm(x)
         x = self.linear_embedding(x)
 
