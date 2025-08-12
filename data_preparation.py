@@ -1,54 +1,37 @@
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
-import joblib
-import os
 
 def create_windows(data, window_size, step_size):
+    if isinstance(data, pd.DataFrame):
+        data = data.values
+    data = np.asarray(data, dtype=np.float32)
+    T, D = data.shape
+    if T < window_size:
+        return np.empty((0, window_size, D), dtype=np.float32)
+
     windows = []
-    for i in range(0, len(data) - window_size + 1, step_size):
-        windows.append(data[i:i + window_size])
-    return np.array(windows)
+    for start in range(0, T - window_size + 1, step_size):
+        windows.append(data[start:start + window_size])
+    return np.stack(windows, axis=0) if windows else np.empty((0, window_size, D), dtype=np.float32)
+
+def instance_normalize_windows(windows, eps: float = 1e-5):
+    if windows.size == 0:
+        return windows
+    mean = windows.mean(axis=1, keepdims=True)  # (N, 1, D)
+    std  = windows.std(axis=1, keepdims=True)   # (N, 1, D)
+    return (windows - mean) / (std + eps)
 
 def create_patches(windows, patch_size=6):
-    n_windows, window_size, n_assets = windows.shape
-    patches = []
-    for w in windows:
-        window_patches = []
-        for i in range(0, window_size, patch_size):
-            patch = w[i:i + patch_size]
-            window_patches.append(patch)
-        patches.append(window_patches)
-    return np.array(patches)
-
-def prepare_data(df, window_size, step_size, patch_size=6, train=True, target_dim=None, scaler=None):
-    if isinstance(df, pd.DataFrame):
-        data = df.values
-    else:
-        data = df
-
-    if train:
-        if scaler is not None:
-            raise ValueError("❌ Scaler darf beim Training nicht übergeben werden – er wird neu erstellt.")
-        if target_dim is None:
-            raise ValueError("target_dim muss beim Training angegeben werden.")
-        
-        scaler = StandardScaler()
-        data = scaler.fit_transform(data)
-        joblib.dump(scaler, f"scaler_{target_dim}.pkl")
-
-    else:  # Inferenz
-        if scaler is None:
-            if target_dim is None:
-                raise ValueError("target_dim muss angegeben werden, wenn kein Scaler übergeben wird.")
-            scaler_path = f"scaler_{target_dim}.pkl"
-            if not os.path.exists(scaler_path):
-                raise FileNotFoundError(f"Scaler-Datei '{scaler_path}' nicht gefunden.")
-            scaler = joblib.load(scaler_path)
-        
-        data = scaler.transform(data)
-
-    windows = create_windows(data, window_size, step_size)
-    patched = create_patches(windows, patch_size)
+    if windows.size == 0:
+        return np.empty((0, 0, patch_size, 0), dtype=np.float32)
+    N, W, D = windows.shape
+    assert W % patch_size == 0 
+    n_patches = W // patch_size
+    patched = windows.reshape(N, n_patches, patch_size, D).astype(np.float32)
     return patched
 
+def prepare_data(df, window_size, step_size, patch_size=6, train=True, target_dim=None, scaler=None):
+    windows = create_windows(df, window_size, step_size)
+    windows = instance_normalize_windows(windows)
+    patched = create_patches(windows, patch_size)
+    return patched
