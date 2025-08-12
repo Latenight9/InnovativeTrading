@@ -7,7 +7,8 @@ import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-
+from torch.utils.data import DataLoader, TensorDataset
+from evaluate_anomalies import l2_scores
 from Analysis import load_data, calculate_rolling_beta
 from data_preparation import prepare_data
 from teacher_model import TeacherNet
@@ -17,10 +18,10 @@ from augment_time_series import augment_batch
 from config import DATA_MODE
 
 # ============ Konfiguration ============
-TICKERS = ["UNIUSDT", "ADAUSDT"]
-START_DATE = "2020-01-01"
-END_DATE   = "2024-12-01"
-INTERVAL   = "1h"
+TICKERS = ["GLD", "USO"]
+START_DATE = "2006-04-01"
+END_DATE   = "2010-04-09"
+INTERVAL   = "1d"
 LOOKBACK_PERIOD = 20
 SINCE_DAYS = 730  # für Krypto-Modus
 
@@ -65,14 +66,23 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 @torch.no_grad()
 def _compute_l2_scores(teacher, student, X_np, batch_size=512):
-    X = torch.tensor(X_np, dtype=torch.float32).to(DEVICE)
+    if len(X_np) == 0:
+        return np.zeros(0, dtype=float)
+
+    teacher.eval(); student.eval()
+
+    ds = TensorDataset(torch.tensor(X_np, dtype=torch.float32))
+    ld = DataLoader(ds, batch_size=batch_size, shuffle=False)
+
     scores = []
-    for i in range(0, len(X), batch_size):
-        xb = X[i:i+batch_size]
-        c = teacher(xb); z = student(xb)
-        s = ((z - c) ** 2).sum(dim=1)
+    for (xb,) in ld:
+        xb = xb.to(DEVICE)
+        z = student(xb)
+        c = teacher(xb)
+        s = l2_scores(z, c)            # zentrale Definition (Eq. 8)
         scores.append(s.detach().cpu().numpy())
-    return np.concatenate(scores, axis=0) if scores else np.zeros(0, dtype=float)
+
+    return np.concatenate(scores, axis=0)
 
 
 def _kpp_init_per_feature_embed(X_all: np.ndarray, student: StudentNet, max_samples=KPP_MAX_SAMPLES):

@@ -25,4 +25,4 @@ ADF_THRESHOLD = 0.4
 
 LOOKBACK_PERIOD = 20
 
-DATA_MODE = "crypto"
+DATA_MODE = "stocks"

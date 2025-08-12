@@ -11,6 +11,8 @@ from backtest import simulate_trades, evaluate_performance, plot_equity
 from student_model import StudentNet
 from teacher_model import TeacherNet
 from chan_example import get_chan_example_tickers
+from evaluate_anomalies import l2_scores 
+from torch.utils.data import DataLoader, TensorDataset
 
 # === Direkte Konfiguration ===
 TICKERS = get_chan_example_tickers()  # Erwartet zwei Ticker
@@ -35,7 +37,6 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_models(pair_name, dim):
     num_patches = WINDOW_SIZE // PATCH_SIZE
-
     teacher = TeacherNet(
         input_dim=dim, embedding_dim=TEACHER_EMB, output_dim=OUTPUT_DIM,
         patch_size=PATCH_SIZE, n_patches=num_patches
@@ -68,16 +69,21 @@ def load_train_threshold(pair_name):
     return None
 
 @torch.no_grad()
-def compute_l2_scores(teacher, student, X_np):
-    X = torch.tensor(X_np, dtype=torch.float32).to(DEVICE)
+def compute_l2_scores(teacher, student, X_np, batch_size=256):
+    teacher.eval(); student.eval()
+    if len(X_np) == 0:
+        return np.zeros(0, dtype=float)
+
+    ds = TensorDataset(torch.tensor(X_np, dtype=torch.float32))
+    ld = DataLoader(ds, batch_size=batch_size, shuffle=False)
     scores = []
-    bs = 256
-    for i in range(0, len(X), bs):
-        xb = X[i:i+bs]
-        c = teacher(xb); z = student(xb)
-        s = ((z - c) ** 2).sum(dim=1)
+    for (xb,) in ld:
+        xb = xb.to(DEVICE)
+        c = teacher(xb)
+        z = student(xb)
+        s = l2_scores(z, c)              
         scores.append(s.detach().cpu().numpy())
-    return np.concatenate(scores, axis=0) if scores else np.zeros(0, dtype=float)
+    return np.concatenate(scores, axis=0)
 
 def build_positions(spread, zscore, scores, entry_threshold=None, entry_percentile_fallback=ENTRY_PERCENTILE_FALLBACK, exit_threshold=EXIT_THRESHOLD):
     if entry_threshold is None:

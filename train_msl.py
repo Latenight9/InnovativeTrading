@@ -19,39 +19,64 @@ if torch.cuda.is_available(): torch.cuda.manual_seed_all(42)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# === Pfade / Daten ===
+# === Paths ===
 DATA_DIR        = "data/MSL/train"
 MODEL_DIR       = "checkpoints"
 STUDENT_WEIGHTS = os.path.join(MODEL_DIR, "student_msl.pt")
 TEACHER_INIT    = os.path.join(MODEL_DIR, "teacher_init.pt")  # fester Teacher-Zustand
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# === Hyperparameter (paper-konform) ===
+# === Fixed (paper) dims ===
 WINDOW_SIZE   = 24
 PATCH_SIZE    = 6
 STEP_SIZE     = 1
-BATCH_SIZE    = 32
-EMBEDDING_DIM = 768   
-OUTPUT_DIM    = 128   
-N_PROTOTYPES  = 32    
-EPOCHS        = 75
+EMBEDDING_DIM = 768   # Teacher hidden
+OUTPUT_DIM    = 128   # Projektion (Teacher & Student)
+N_PROTOTYPES  = 32    # Paper: 32
+
+# === Hyperparameter via Umgebungsvariablen (mit Defaults) ===
+def env_get(name, default, cast):
+    v = os.getenv(name); return cast(v) if v is not None else default
+
+# Training
+EPOCHS        = env_get("HP_EPOCHS", 75, int)
 PATIENCE      = 10
 MIN_DELTA     = 1e-4
 
 # Optimierung (nur Student)
-LR              = 2e-4
-WEIGHT_DECAY    = 5e-4
-LAMBDA_CE       = 0
+LR            = env_get("HP_LR", 1e-4, float)   # z.B. 2e-4 via Env
+WEIGHT_DECAY  = env_get("HP_WD", 1e-4, float)   # z.B. 5e-5 via Env
+BATCH_SIZE    = env_get("HP_BS", 32, int)
+LAMBDA_CE     = env_get("HP_LCE", 0.0, float)   # Teacher frozen => 0.0
 
-# Anti-Kollaps Maßnahmen
-PROTO_LR_MULT        = 0.6      
-WARMUP_EPOCHS        = 1         
-KPP_MAX_SAMPLES      = 150_000   
-REINIT_AFTER_EPOCH   = 1         
-REINIT_MIN_UNIQUE    = 24        
-USAGE_CHECK_SAMPLES  = 2_000     
-TEACHER_MIN_VAR      = 0.25      
-TEACHER_TRIES        = 8         
+# Anti-Kollaps
+PROTO_LR_MULT       = env_get("HP_PLM", 0.5, float)   # z.B. 0.6 via Env
+WARMUP_EPOCHS       = env_get("HP_WARMUP", 1, int)    # z.B. 2 via Env
+KPP_MAX_SAMPLES     = env_get("HP_KPP", 100_000, int) # z.B. 120_000 / 150_000
+REINIT_AFTER_EPOCH  = 1
+REINIT_MIN_UNIQUE   = 24
+USAGE_CHECK_SAMPLES = 2_000
+TEACHER_MIN_VAR     = 0.25
+TEACHER_TRIES       = 8
+
+# Augment-Defaults (frühe Epochen sanfter steuerbar)
+AUG_JIT0 = env_get("HP_JIT0", 0.03, float)
+AUG_SCA0 = env_get("HP_SCA0", 0.08, float)
+AUG_WAR0 = env_get("HP_WAR0", 0.20, float)
+
+def aug_cfg(epoch: int):
+    if epoch < 5:
+        return dict(
+            jitter_sigma=AUG_JIT0, scaling_sigma=AUG_SCA0, max_warp=AUG_WAR0,
+            p_jitter=0.45, p_scaling=0.35, p_warp=0.20
+        )
+    else:
+        return dict(
+            jitter_sigma=0.05, scaling_sigma=0.10, max_warp=0.30,
+            p_jitter=0.45, p_scaling=0.35, p_warp=0.20
+        )
+
+# -------------------------------------------------------------
 
 def _load_array(path: str) -> np.ndarray:
     if path.endswith(".npz"):
@@ -65,6 +90,10 @@ def _load_array(path: str) -> np.ndarray:
     return arr
 
 def _kpp_init_per_feature_embed(X_all: np.ndarray, student: StudentNet, max_samples=KPP_MAX_SAMPLES):
+    """
+    Diversifizierte Proto-Init je Feature per k-means++ im EMBEDDING-Raum.
+    X_all: (W, N, P, D)
+    """
     W, N, P, D = X_all.shape
     M = student.n_prototypes
     dev = student.prototypes.device
@@ -100,6 +129,7 @@ def _kpp_init_per_feature_embed(X_all: np.ndarray, student: StudentNet, max_samp
 
 @torch.no_grad()
 def _proto_usage_embed(student: StudentNet, X_all: np.ndarray, k: int = 2_000):
+    """Schnelle Nutzungsprüfung der Prototypen im EMBEDDING-Raum. Gibt (unique_used, top5_counts) zurück."""
     W = min(k, X_all.shape[0])
     x = torch.tensor(X_all[:W], dtype=torch.float32, device=DEVICE)  # (W,N,P,D)
     B, N, P, D = x.shape
@@ -121,6 +151,12 @@ def _proto_usage_embed(student: StudentNet, X_all: np.ndarray, k: int = 2_000):
 
 def _teacher_healthcheck_and_save(teacher: TeacherNet, sample_windows: np.ndarray, path: str,
                                   min_var: float = TEACHER_MIN_VAR, tries: int = TEACHER_TRIES):
+    """
+    Einmalige 'gesunde' Teacher-Init:
+    - misst Varianz der Teacher-Outputs auf sample_windows
+    - falls zu niedrig, re-initialisiert NUR die zwei kleinen Layer
+    - speichert bei Erfolg nach 'path'
+    """
     if os.path.exists(path):
         teacher.load_state_dict(torch.load(path, map_location=DEVICE))
         return
@@ -154,6 +190,8 @@ def _teacher_healthcheck_and_save(teacher: TeacherNet, sample_windows: np.ndarra
             return
 
     raise RuntimeError(f"Teacher variance too low after {tries} re-inits. Check data/scale.")
+
+# -------------------------------------------------------------
 
 def train_on_group(file_list, input_dim):
     num_patches = WINDOW_SIZE // PATCH_SIZE
@@ -235,15 +273,9 @@ def train_on_group(file_list, input_dim):
 
         for (batch,) in loader:
             batch = batch.to(DEVICE)
-
-            # kräftigere, aber kontrollierte Augmentierung
-            batch_aug = augment_batch(
-                batch,
-                jitter_sigma=0.05,
-                scaling_sigma=0.1,
-                max_warp=0.30,
-                p_jitter=0.45, p_scaling=0.35, p_warp=0.20
-            ).to(DEVICE)
+            cfg = aug_cfg(epoch)
+            # Augmentierung gemäß cfg (keine doppelten Argumente)
+            batch_aug = augment_batch(batch, **cfg).to(DEVICE)
 
             # Student-Forward
             z     = student(batch)
@@ -297,6 +329,8 @@ def train_on_group(file_list, input_dim):
             if patience >= PATIENCE:
                 print("🛑 early stopping.")
                 break
+
+# -------------------------------------------------------------
 
 def main():
     files = sorted(f for f in os.listdir(DATA_DIR) if f.endswith(".npy") or f.endswith(".npz"))

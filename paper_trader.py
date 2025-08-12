@@ -9,10 +9,11 @@ import statsmodels.api as sm
 import matplotlib
 matplotlib.use('Agg')
 from binance_keys import API_KEY, API_SECRET
-
+from evaluate_anomalies import l2_scores
 from teacher_model import TeacherNet
 from student_model import StudentNet
 from data_preparation import prepare_data
+from torch.utils.data import DataLoader, TensorDataset
 
 # === PARAMETER ===
 TICKERS = ["UNIUSDT", "ADAUSDT"]
@@ -98,13 +99,17 @@ def _load_train_threshold():
 
 @torch.no_grad()
 def l2_score_for_window(spread_window):
-    X = prepare_data(spread_window.reshape(-1, 1), WINDOW_SIZE, STEP_SIZE, PATCH_SIZE,
+    X = prepare_data(spread_window.reshape(-1, 1),
+                     WINDOW_SIZE, STEP_SIZE, PATCH_SIZE,
                      train=False, target_dim=1)
     if len(X) == 0:
         return None
-    x = torch.tensor(X[-1:], dtype=torch.float32).to(DEVICE)
-    c = teacher(x); z = student(x)
-    return float(((z - c) ** 2).sum(dim=1).item())
+    x = torch.tensor(X[-1:], dtype=torch.float32, device=DEVICE)  
+    teacher.eval(); student.eval()
+    c = teacher(x)
+    z = student(x)
+    s = l2_scores(z, c)      
+    return float(s.item())
 
 @torch.no_grad()
 def local_entry_threshold(spread_series, percentile=ENTRY_PERCENTILE):
